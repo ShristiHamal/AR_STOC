@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "ar-stoc"
+version = "0.1.0"
+description = "AR Virtual Try-On Project using Stable Diffusion and ClearML"
+authors = ["ShristiHamal <shristihamal@gmail.com>"]
+packages = [{ include = "app" }]  # Include your Python package directory
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.14"
+clearml = "^2.0.2"
+diffusers = "0.19.1"
+transformers = "4.33.2"
+huggingface-hub = "0.16.4"
+accelerate = "0.20.3"  # use a version compatible with diffusers
+torch = "2.2.0"
+torchvision = "0.17.0"
+safetensors = "^0.6.2"
+Pillow = "11.3.0"
+numpy = "^1.25.0"
+controlnet-aux = "^0.0.6"
+matplotlib = "^3.7"
+protobuf = "4.22.1"
+python-dotenv = "^1.1.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
