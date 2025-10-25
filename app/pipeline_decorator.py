@@ -6,7 +6,7 @@ import csv
 import torch
 
 @PipelineDecorator.pipeline(
-    name="AR Smart Try-On Full Pipeline",
+    name="AR Smart Try-On ",
     project="AR Smart Try-On",
     version="1.0.0",
     default_queue="mlops_pipeline" 

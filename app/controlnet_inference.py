@@ -39,6 +39,7 @@ def run_controlnet_inference(person_img_path, mask_img_path, prompt="Virtual try
             num_inference_steps=8  # was 20
         ).images[0]
 
+    result.save("debug_output.jpg")
     return result
 
 def batch_infer(rows, output_path, logger):
