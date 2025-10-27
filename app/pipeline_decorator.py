@@ -59,7 +59,7 @@ def training(csv_path: str, output_dir: str) -> str:
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    print(f"🧩 Using device: {device}")
+    print(f" Using device: {device}")
 
     pose_controlnet = ControlNetModel.from_pretrained(
         "lllyasviel/sd-controlnet-openpose", torch_dtype=dtype
@@ -101,7 +101,7 @@ def training(csv_path: str, output_dir: str) -> str:
             result = run_inference(row['person_image'], row['mask_image'])
             out_path = output_path / f"tryon_{i}.png"
             result.save(out_path)
-            print(f"[{i}] ✅ Generated {out_path}")
+            print(f"[{i}] Generated {out_path}")
         except Exception as e:
             print(f"[{i}] Failed: {e}")
 
@@ -124,3 +124,17 @@ def evaluation(inference_dir: str) -> dict:
             print(f"Failed to evaluate {img_file.name}: {e}")
     print(f" Evaluation complete for {len(scores)} images.")
     return {"image_stats": scores}
+
+if __name__ == "__main__":
+    pipeline_instance = full_pipeline(
+        output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs",
+    )
+
+    # Submit the pipeline to the ClearML agent queue
+    pipeline_instance.start(
+        queue="ar_stoc",
+        repo="https://github.com/ShristiHamal/AR_STOC.git",
+        branch="main" 
+    )
+
+
