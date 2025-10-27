@@ -1,41 +1,43 @@
-from clearml import PipelineDecorator, Task, Dataset
+# app/pipeline_decorator.py
+from clearml import PipelineDecorator, Dataset, Task
 from pathlib import Path
 from PIL import Image
 import numpy as np
 import csv
 import torch
 
-@PipelineDecorator.pipeline(
-    name="AR Smart Try-On ",
-    project="AR Smart Try-On",
-    version="1.0.0",
-    default_queue="mlops_pipeline" 
-)
-def full_pipeline(split: str, output_dir: str, root_dir: str):
-    Task.current_task().connect({
-        "split": split,
-        "output_dir": output_dir,
-        "root_dir": root_dir
-    })
+# Dataset ID
+CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
 
-    csv_path = preprocessing(split, root_dir)
+@PipelineDecorator.pipeline(
+    name="AR_TryOn_Pipeline",
+    project="AR_STOC",
+    version="1.0.0",
+    pipeline_execution_queue="ar_stoc",
+)
+def full_pipeline(output_dir: str):
+    dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
+    root_dir = dataset.get_local_copy()
+
+    csv_path = preprocessing(root_dir)
     inference_dir = training(csv_path, output_dir)
     metrics = evaluation(inference_dir)
     return metrics
 
-@PipelineDecorator.component(name="preprocessing", return_values=["csv_path"])
-def preprocessing(split: str, root_dir: str) -> str:
-    root = Path(root_dir)
-    images = np.load(root / f"{split}_image.npy")
-    masks = np.load(root / f"{split}_cloth_mask.npy")
 
-    csv_file = root / f"{split}_dataset.csv"
+@PipelineDecorator.component(return_values=["csv_path"])
+def preprocessing(root_dir: str) -> str:
+    root = Path(root_dir)
+    images = np.load(root / "image.npy")
+    masks = np.load(root / "cloth_mask.npy")
+
+    csv_file = root / "dataset.csv"
     with open(csv_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["person_image", "mask_image"])
         writer.writeheader()
         for i in range(len(images)):
-            person_img_path = root / f"{split}_img_{i}.png"
-            mask_img_path = root / f"{split}_mask_{i}.png"
+            person_img_path = root / f"img_{i}.png"
+            mask_img_path = root / f"mask_{i}.png"
             Image.fromarray(images[i]).save(person_img_path)
             Image.fromarray(masks[i]).save(mask_img_path)
             writer.writerow({
@@ -43,9 +45,11 @@ def preprocessing(split: str, root_dir: str) -> str:
                 "mask_image": str(mask_img_path)
             })
 
+    print(f" Preprocessing complete. Saved CSV at {csv_file}")
     return str(csv_file)
 
-@PipelineDecorator.component(name="training", return_values=["inference_dir"])
+
+@PipelineDecorator.component(return_values=["inference_dir"])
 def training(csv_path: str, output_dir: str) -> str:
     from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
     from controlnet_aux import OpenposeDetector
@@ -55,8 +59,7 @@ def training(csv_path: str, output_dir: str) -> str:
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    task = Task.current_task()
-    logger = task.get_logger()
+    print(f"🧩 Using device: {device}")
 
     pose_controlnet = ControlNetModel.from_pretrained(
         "lllyasviel/sd-controlnet-openpose", torch_dtype=dtype
@@ -71,9 +74,10 @@ def training(csv_path: str, output_dir: str) -> str:
         torch_dtype=dtype
     ).to(device)
     pipe.safety_checker = lambda images, **kwargs: (images, False)
+
     pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
-    def run_controlnet_inference(person_img_path, mask_img_path, prompt="Virtual try-on"):
+    def run_inference(person_img_path, mask_img_path, prompt="Virtual try-on"):
         person_img = Image.open(person_img_path).convert("RGB").resize((512, 512))
         mask_img = Image.open(mask_img_path).convert("RGB").resize((512, 512))
         pose_img = pose_detector(person_img)
@@ -90,34 +94,27 @@ def training(csv_path: str, output_dir: str) -> str:
         return result
 
     with Path(csv_path).open(newline='') as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
+        rows = list(csv.DictReader(f))
 
-    for row_num, row in enumerate(rows, start=1):
+    for i, row in enumerate(rows, start=1):
         try:
-            person_path = row['person_image']
-            mask_path = row['mask_image']
-            stem = Path(person_path).name
-
-            result = run_controlnet_inference(person_path, mask_path)
-            out_path = output_path / f"tryon_{stem}"
+            result = run_inference(row['person_image'], row['mask_image'])
+            out_path = output_path / f"tryon_{i}.png"
             result.save(out_path)
-
-            logger.report_image("Try-On Result", "Dual ControlNet", row_num, str(out_path))
-            print(f"[Row {row_num}] Processed {stem}")
+            print(f"[{i}] ✅ Generated {out_path}")
         except Exception as e:
-            print(f"[Row {row_num}] Failed on {row.get('person_image', 'unknown')}: {e}")
+            print(f"[{i}] Failed: {e}")
 
     return str(output_path)
 
-@PipelineDecorator.component(name="evaluation", return_values=["metrics"])
+
+@PipelineDecorator.component(return_values=["metrics"])
 def evaluation(inference_dir: str) -> dict:
     output_path = Path(inference_dir)
     scores = []
     for img_file in output_path.glob("tryon_*.png"):
         try:
-            img = Image.open(img_file).convert("RGB")
-            arr = np.array(img)
+            arr = np.array(Image.open(img_file).convert("RGB"))
             scores.append({
                 "file": img_file.name,
                 "mean_pixel": float(arr.mean()),
@@ -125,13 +122,5 @@ def evaluation(inference_dir: str) -> dict:
             })
         except Exception as e:
             print(f"Failed to evaluate {img_file.name}: {e}")
-    print(f"Evaluated {len(scores)} images")
+    print(f" Evaluation complete for {len(scores)} images.")
     return {"image_stats": scores}
-
-if __name__ == "__main__":
-    pipeline_instance = full_pipeline(
-        split="train",
-        output_dir="/content/drive/MyDrive/IndustryProject/Dataset/train/outputs",
-        root_dir="/content/drive/MyDrive/IndustryProject/Dataset/train"
-    )
-    pipeline_instance.start(queue="mlops_pipeline")
