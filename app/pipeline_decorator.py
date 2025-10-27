@@ -1,5 +1,5 @@
 # app/pipeline_decorator.py
-from clearml import PipelineDecorator, Dataset, Task
+from clearml import PipelineDecorator, Dataset
 from pathlib import Path
 from PIL import Image
 import numpy as np
@@ -16,17 +16,22 @@ CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
     pipeline_execution_queue="ar_stoc",
 )
 def full_pipeline(output_dir: str):
+    """Main pipeline function"""
+    # Get dataset
     dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
     root_dir = dataset.get_local_copy()
 
+    # Run steps
     csv_path = preprocessing(root_dir)
     inference_dir = training(csv_path, output_dir)
     metrics = evaluation(inference_dir)
     return metrics
 
+# --------------------- Pipeline Components ---------------------
 
 @PipelineDecorator.component(return_values=["csv_path"])
 def preprocessing(root_dir: str) -> str:
+    """Preprocess images and masks into a CSV file"""
     root = Path(root_dir)
     images = np.load(root / "image.npy")
     masks = np.load(root / "cloth_mask.npy")
@@ -44,13 +49,12 @@ def preprocessing(root_dir: str) -> str:
                 "person_image": str(person_img_path),
                 "mask_image": str(mask_img_path)
             })
-
-    print(f" Preprocessing complete. Saved CSV at {csv_file}")
+    print(f"[Preprocessing] CSV saved at {csv_file}")
     return str(csv_file)
-
 
 @PipelineDecorator.component(return_values=["inference_dir"])
 def training(csv_path: str, output_dir: str) -> str:
+    """Run ControlNet inference for all images"""
     from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
     from controlnet_aux import OpenposeDetector
 
@@ -59,14 +63,11 @@ def training(csv_path: str, output_dir: str) -> str:
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    print(f" Using device: {device}")
+    print(f"[Training] Using device: {device}")
 
-    pose_controlnet = ControlNetModel.from_pretrained(
-        "lllyasviel/sd-controlnet-openpose", torch_dtype=dtype
-    )
-    seg_controlnet = ControlNetModel.from_pretrained(
-        "lllyasviel/sd-controlnet-seg", torch_dtype=dtype
-    )
+    # Load ControlNet models
+    pose_controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-openpose", torch_dtype=dtype)
+    seg_controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-seg", torch_dtype=dtype)
 
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         "runwayml/stable-diffusion-v1-5",
@@ -77,6 +78,7 @@ def training(csv_path: str, output_dir: str) -> str:
 
     pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
+    # Inference function
     def run_inference(person_img_path, mask_img_path, prompt="Virtual try-on"):
         person_img = Image.open(person_img_path).convert("RGB").resize((512, 512))
         mask_img = Image.open(mask_img_path).convert("RGB").resize((512, 512))
@@ -93,6 +95,7 @@ def training(csv_path: str, output_dir: str) -> str:
             ).images[0]
         return result
 
+    # Run inference on all rows in CSV
     with Path(csv_path).open(newline='') as f:
         rows = list(csv.DictReader(f))
 
@@ -101,15 +104,15 @@ def training(csv_path: str, output_dir: str) -> str:
             result = run_inference(row['person_image'], row['mask_image'])
             out_path = output_path / f"tryon_{i}.png"
             result.save(out_path)
-            print(f"[{i}] Generated {out_path}")
+            print(f"[Training] Generated {out_path}")
         except Exception as e:
-            print(f"[{i}] Failed: {e}")
+            print(f"[Training] Failed for row {i}: {e}")
 
     return str(output_path)
 
-
 @PipelineDecorator.component(return_values=["metrics"])
 def evaluation(inference_dir: str) -> dict:
+    """Evaluate generated try-on images"""
     output_path = Path(inference_dir)
     scores = []
     for img_file in output_path.glob("tryon_*.png"):
@@ -121,24 +124,19 @@ def evaluation(inference_dir: str) -> dict:
                 "std_pixel": float(arr.std())
             })
         except Exception as e:
-            print(f"Failed to evaluate {img_file.name}: {e}")
-    print(f" Evaluation complete for {len(scores)} images.")
+            print(f"[Evaluation] Failed for {img_file.name}: {e}")
+    print(f"[Evaluation] Complete for {len(scores)} images")
     return {"image_stats": scores}
 
 if __name__ == "__main__":
-    from app.pipeline_decorator import full_pipeline  
+    from clearml.automation.controller import PipelineDecorator
 
-    pipeline_instance = full_pipeline(
+    # Run pipeline locally or submit to agent
+    PipelineDecorator.run_pipeline(
+        full_pipeline,
         output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs",
-        root_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC"  
-    )
-
-    # Submit the pipeline to the ClearML agent queue
-    pipeline_instance.start(
         queue="ar_stoc",
-        repo="https://github.com/ShristiHamal/AR_STOC.git",
+        repo="git@github.com:ShristiHamal/AR_STOC.git",
         branch="main"
     )
-
-
-
+    
