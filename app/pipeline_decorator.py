@@ -126,15 +126,19 @@ def evaluation(inference_dir: str) -> dict:
     return {"image_stats": scores}
 
 if __name__ == "__main__":
+    from app.pipeline_decorator import full_pipeline  
+
     pipeline_instance = full_pipeline(
         output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs",
+        root_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC"  
     )
 
     # Submit the pipeline to the ClearML agent queue
     pipeline_instance.start(
         queue="ar_stoc",
         repo="https://github.com/ShristiHamal/AR_STOC.git",
-        branch="main" 
+        branch="main"
     )
+
 
 
