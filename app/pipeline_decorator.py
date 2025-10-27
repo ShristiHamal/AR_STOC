@@ -1,10 +1,11 @@
 # app/pipeline_decorator.py
-from clearml import PipelineDecorator, Dataset
+from clearml import PipelineDecorator, Dataset, Task
 from pathlib import Path
 from PIL import Image
 import numpy as np
 import csv
 import torch
+
 
 # Dataset ID
 CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
@@ -14,24 +15,33 @@ CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
     project="AR_STOC",
     version="1.0.0",
     pipeline_execution_queue="ar_stoc",
+    add_requirements=True,
+    
 )
 def full_pipeline(output_dir: str):
-    """Main pipeline function"""
-    # Get dataset
+    from clearml import Task
+
+    task = Task.init(
+    project_name="AR_TryOn",
+    task_name="AR_Pipeline",
+    repo="https://github.com/ShristiHamal/AR_STOC.git"
+)
+
+    # Task.current_task().connect({"output_dir": output_dir})
+
+    # Fetch dataset from ClearML
     dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
     root_dir = dataset.get_local_copy()
 
-    # Run steps
     csv_path = preprocessing(root_dir)
     inference_dir = training(csv_path, output_dir)
     metrics = evaluation(inference_dir)
     return metrics
 
-# --------------------- Pipeline Components ---------------------
 
+# -------------------- Pipeline Components --------------------
 @PipelineDecorator.component(return_values=["csv_path"])
 def preprocessing(root_dir: str) -> str:
-    """Preprocess images and masks into a CSV file"""
     root = Path(root_dir)
     images = np.load(root / "image.npy")
     masks = np.load(root / "cloth_mask.npy")
@@ -52,9 +62,9 @@ def preprocessing(root_dir: str) -> str:
     print(f"[Preprocessing] CSV saved at {csv_file}")
     return str(csv_file)
 
+
 @PipelineDecorator.component(return_values=["inference_dir"])
 def training(csv_path: str, output_dir: str) -> str:
-    """Run ControlNet inference for all images"""
     from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
     from controlnet_aux import OpenposeDetector
 
@@ -65,7 +75,6 @@ def training(csv_path: str, output_dir: str) -> str:
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"[Training] Using device: {device}")
 
-    # Load ControlNet models
     pose_controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-openpose", torch_dtype=dtype)
     seg_controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-seg", torch_dtype=dtype)
 
@@ -78,7 +87,6 @@ def training(csv_path: str, output_dir: str) -> str:
 
     pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
-    # Inference function
     def run_inference(person_img_path, mask_img_path, prompt="Virtual try-on"):
         person_img = Image.open(person_img_path).convert("RGB").resize((512, 512))
         mask_img = Image.open(mask_img_path).convert("RGB").resize((512, 512))
@@ -95,7 +103,7 @@ def training(csv_path: str, output_dir: str) -> str:
             ).images[0]
         return result
 
-    # Run inference on all rows in CSV
+    # Run inference on all CSV rows
     with Path(csv_path).open(newline='') as f:
         rows = list(csv.DictReader(f))
 
@@ -110,9 +118,9 @@ def training(csv_path: str, output_dir: str) -> str:
 
     return str(output_path)
 
+
 @PipelineDecorator.component(return_values=["metrics"])
 def evaluation(inference_dir: str) -> dict:
-    """Evaluate generated try-on images"""
     output_path = Path(inference_dir)
     scores = []
     for img_file in output_path.glob("tryon_*.png"):
@@ -128,15 +136,15 @@ def evaluation(inference_dir: str) -> dict:
     print(f"[Evaluation] Complete for {len(scores)} images")
     return {"image_stats": scores}
 
-if __name__ == "__main__":
-    from clearml.automation.controller import PipelineDecorator
 
-    # Run pipeline locally or submit to agent
-    PipelineDecorator.run_pipeline(
-        full_pipeline,
-        output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs",
-        queue="ar_stoc",
-        repo="git@github.com:ShristiHamal/AR_STOC.git",
-        branch="main"
+# -------------------- Main --------------------
+if __name__ == "__main__":
+    pipeline_instance = full_pipeline(
+        output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs"
     )
-    
+
+    # Start pipeline on ClearML agent queue
+    pipeline_instance.start(
+        queue="ar_stoc",
+        repo="https://github.com/ShristiHamal/AR_STOC.git",  
+    )
