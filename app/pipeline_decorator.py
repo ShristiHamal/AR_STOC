@@ -10,7 +10,7 @@ import torch
 CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
 
 @PipelineDecorator.pipeline(
-    name="AR_TryOn_Pipeline",
+    name="AR_TryOn",
     project="AR_STOC",
     version="1.0.0",
     pipeline_execution_queue="ar_stoc",
