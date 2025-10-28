@@ -1,12 +1,13 @@
 # app/pipeline_decorator.py
 from clearml import PipelineDecorator, Dataset, Task
 from pathlib import Path
-from app.data_prep import make_csv
-from app.controlnet_inference import run_controlnet_inference
-from app.sd_inference import run_sd_inference
+from data_prep import make_csv
+from controlnet_inference import run_controlnet_inference
+from sd_inference import run_sd_inference
 
 # -------------------- Config --------------------
-CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
+# CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
+CLEARML_DATASET_ID = "c1fca92f4cc1402fac5fd6026c1128e5"
 PIPELINE_NAME = "AR_TryOn"
 PROJECT_NAME = "AR_STOC"
 PIPELINE_VERSION = "1.0.0"
