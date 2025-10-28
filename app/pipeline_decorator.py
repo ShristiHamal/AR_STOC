@@ -1,149 +1,126 @@
 # app/pipeline_decorator.py
 from clearml import PipelineDecorator, Dataset, Task
 from pathlib import Path
-from PIL import Image
-import numpy as np
-import csv
-import torch
+from data_prep import make_csv
+from controlnet_inference import run_controlnet_inference
+from sd_inference import run_sd_inference
 
-# Dataset ID
+# -------------------- Config --------------------
 CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
+PIPELINE_NAME = "AR_TryOn"
+PROJECT_NAME = "AR_STOC"
+PIPELINE_VERSION = "1.0.0"
+QUEUE_NAME = "ar_stoc"
 
+# -------------------- Pipeline --------------------
 @PipelineDecorator.pipeline(
-    name="AR_TryOn",
-    project="AR_STOC",
-    version="1.0.0",
-    pipeline_execution_queue="ar_stoc",
-    # add_requirements=True,
-    
+    name=PIPELINE_NAME,
+    project=PROJECT_NAME,
+    version=PIPELINE_VERSION,
+    pipeline_execution_queue=QUEUE_NAME
 )
 def full_pipeline(output_dir: str):
-    from clearml import Task
-
-    task = Task.init(
-    project_name="AR_TryOn",
-    task_name="AR_Pipeline",
-    repo="https://github.com/ShristiHamal/AR_STOC.git"
-)
-
-    # Task.current_task().connect({"output_dir": output_dir})
-
+    """
+    Full pipeline: preprocessing -> ControlNet inference -> SD evaluation
+    """
     # Fetch dataset from ClearML
     dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
     root_dir = dataset.get_local_copy()
 
-    csv_path = preprocessing(root_dir)
-    inference_dir = training(csv_path, output_dir)
-    metrics = evaluation(inference_dir)
-    return metrics
+    # Preprocessing
+    csv_path = preprocessing_component(root_dir)
 
+    # ControlNet inference
+    controlnet_output_dir = controlnet_component(csv_path, output_dir)
+
+    # SD inpainting evaluation
+    sd_metrics = sd_component(controlnet_output_dir, output_dir)
+
+    return sd_metrics
 
 # -------------------- Pipeline Components --------------------
 @PipelineDecorator.component(return_values=["csv_path"])
-def preprocessing(root_dir: str) -> str:
-    root = Path(root_dir)
-    images = np.load(root / "image.npy")
-    masks = np.load(root / "cloth_mask.npy")
+def preprocessing_component(root_dir: str) -> str:
+    """
+    Preprocessing: generate CSV of valid pairs from dataset
+    """
+    root_path = Path(root_dir)
+    csv_path = make_csv(root_path, split="train")  # You can adjust split if needed
+    print(f"[Preprocessing] CSV saved at {csv_path}")
+    return str(csv_path)
 
-    csv_file = root / "dataset.csv"
-    with open(csv_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["person_image", "mask_image"])
-        writer.writeheader()
-        for i in range(len(images)):
-            person_img_path = root / f"img_{i}.png"
-            mask_img_path = root / f"mask_{i}.png"
-            Image.fromarray(images[i]).save(person_img_path)
-            Image.fromarray(masks[i]).save(mask_img_path)
-            writer.writerow({
-                "person_image": str(person_img_path),
-                "mask_image": str(mask_img_path)
-            })
-    print(f"[Preprocessing] CSV saved at {csv_file}")
-    return str(csv_file)
-
-
-@PipelineDecorator.component(return_values=["inference_dir"])
-def training(csv_path: str, output_dir: str) -> str:
-    from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
-    from controlnet_aux import OpenposeDetector
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if device.type == "cuda" else torch.float32
-
-    output_path = Path(output_dir)
+@PipelineDecorator.component(return_values=["controlnet_output_dir"])
+def controlnet_component(csv_path: str, output_dir: str) -> str:
+    """
+    Run ControlNet inference for virtual try-on
+    """
+    output_path = Path(output_dir) / "controlnet_outputs"
     output_path.mkdir(parents=True, exist_ok=True)
-    print(f"[Training] Using device: {device}")
 
-    pose_controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-openpose", torch_dtype=dtype)
-    seg_controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-seg", torch_dtype=dtype)
+    from controlnet_inference import run_controlnet_inference
+    import csv
 
-    pipe = StableDiffusionControlNetPipeline.from_pretrained(
-        "runwayml/stable-diffusion-v1-5",
-        controlnet=[pose_controlnet, seg_controlnet],
-        torch_dtype=dtype
-    ).to(device)
-    pipe.safety_checker = lambda images, **kwargs: (images, False)
-
-    pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
-
-    def run_inference(person_img_path, mask_img_path, prompt="Virtual try-on"):
-        person_img = Image.open(person_img_path).convert("RGB").resize((512, 512))
-        mask_img = Image.open(mask_img_path).convert("RGB").resize((512, 512))
-        pose_img = pose_detector(person_img)
-        if isinstance(pose_img, np.ndarray):
-            pose_img = Image.fromarray(pose_img)
-
-        with torch.autocast(device_type=device.type, dtype=dtype):
-            result = pipe(
-                prompt=prompt,
-                image=person_img,
-                control_image=[pose_img, mask_img],
-                num_inference_steps=8
-            ).images[0]
-        return result
-
-    # Run inference on all CSV rows
-    with Path(csv_path).open(newline='') as f:
-        rows = list(csv.DictReader(f))
+    with open(csv_path, newline='') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
 
     for i, row in enumerate(rows, start=1):
         try:
-            result = run_inference(row['person_image'], row['mask_image'])
-            out_path = output_path / f"tryon_{i}.png"
-            result.save(out_path)
-            print(f"[Training] Generated {out_path}")
+            result = run_controlnet_inference(
+                row['person_image'],
+                row['mask_image'],
+                prompt="Virtual try-on"
+            )
+            out_file = output_path / f"tryon_{i}.png"
+            result.save(out_file)
+            print(f"[ControlNet] Saved {out_file}")
         except Exception as e:
-            print(f"[Training] Failed for row {i}: {e}")
+            print(f"[ControlNet] Failed row {i}: {e}")
 
     return str(output_path)
 
+@PipelineDecorator.component(return_values=["sd_metrics"])
+def sd_component(controlnet_output_dir: str, output_dir: str) -> dict:
+    """
+    Run SD inpainting evaluation on ControlNet outputs
+    """
+    controlnet_path = Path(controlnet_output_dir)
+    sd_output_path = Path(output_dir) / "sd_outputs"
+    sd_output_path.mkdir(parents=True, exist_ok=True)
 
-@PipelineDecorator.component(return_values=["metrics"])
-def evaluation(inference_dir: str) -> dict:
-    output_path = Path(inference_dir)
-    scores = []
-    for img_file in output_path.glob("tryon_*.png"):
+    from sd_inference import run_sd_inference
+    from PIL import Image
+    import numpy as np
+
+    metrics = []
+    for img_file in controlnet_path.glob("tryon_*.png"):
         try:
-            arr = np.array(Image.open(img_file).convert("RGB"))
-            scores.append({
-                "file": img_file.name,
+            result = run_sd_inference(img_file, img_file, img_file, sd_output_path)
+            out_file = sd_output_path / img_file.name
+            result.save(out_file)
+
+            arr = np.array(result.convert("RGB"))
+            metrics.append({
+                "file": out_file.name,
                 "mean_pixel": float(arr.mean()),
                 "std_pixel": float(arr.std())
             })
+            print(f"[SD] Saved {out_file}")
         except Exception as e:
-            print(f"[Evaluation] Failed for {img_file.name}: {e}")
-    print(f"[Evaluation] Complete for {len(scores)} images")
-    return {"image_stats": scores}
+            print(f"[SD] Failed {img_file.name}: {e}")
 
+    print(f"[SD] Evaluation completed for {len(metrics)} images")
+    return {"image_stats": metrics}
 
 # -------------------- Main --------------------
 if __name__ == "__main__":
-    pipeline_instance = full_pipeline(
-        output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs"
-    )
+    OUTPUT_DIR = r"C:\Users\shris\OneDrive - UTS\Documents\GitHub\AR_STOC\pipeline_outputs"
+    
+    # Run pipeline
+    pipeline_instance = full_pipeline(output_dir=OUTPUT_DIR)
 
-    # Start pipeline on ClearML agent queue
+    # Enqueue pipeline to ClearML agent
     pipeline_instance.start(
-        queue="ar_stoc",
-        repo="https://github.com/ShristiHamal/AR_STOC.git",  
+        queue=QUEUE_NAME,
+        repo="https://github.com/ShristiHamal/AR_STOC.git"
     )
