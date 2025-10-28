@@ -7,9 +7,9 @@ import numpy as np
 from pathlib import Path
 from clearml import PipelineDecorator, Dataset, Task
 from pathlib import Path
-from .data_prep import make_csv
-from .controlnet_inference import run_controlnet_inference
-from .sd_inference import run_sd_inference
+from data_prep import make_csv
+from controlnet_inference import run_controlnet_inference
+from sd_inference import run_sd_inference
 
 # -------------------- Config --------------------
 # CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
