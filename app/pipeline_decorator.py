@@ -6,7 +6,6 @@ import numpy as np
 import csv
 import torch
 
-
 # Dataset ID
 CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
 
@@ -15,7 +14,7 @@ CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
     project="AR_STOC",
     version="1.0.0",
     pipeline_execution_queue="ar_stoc",
-    add_requirements=True,
+    # add_requirements=True,
     
 )
 def full_pipeline(output_dir: str):
