@@ -1,4 +1,5 @@
 # pipeline_decorator.py
+
 from clearml import PipelineDecorator, Task, Dataset
 from pathlib import Path
 from PIL import Image
@@ -6,83 +7,113 @@ import numpy as np
 import csv
 import torch
 
-# ClearML dataset ID
-CLEARML_DATASET_ID = "8832df278eb245b2856da6c202aaa876"
-
+# ----------------------------------------------------
+# Full Pipeline Definition
+# ----------------------------------------------------
 @PipelineDecorator.pipeline(
-    name="AR_TryOn",
+    name="AR_TryOn_Full",
     project="AR_STOC",
     version="1.0.0",
-    pipeline_execution_queue="ar_stoc",
-    
+    default_queue="ar_stoc",            # Component default queue
+    pipeline_execution_queue="ar_stoc"  # Main controller queue
 )
 def full_pipeline(output_dir: str):
-    from clearml import Task
+    """
+    Full AR Try-On pipeline: preprocessing -> training/inference -> evaluation
+    """
+    task = Task.current_task()
+    logger = task.get_logger()
+    logger.report_text("Starting full AR Try-On pipeline")
 
-    task = Task.init(
-    project_name="AR_TryOn",
-    task_name="AR_Pipeline",
-    repo="https://github.com/ShristiHamal/AR_STOC.git"
-)
+    # Step 1: Preprocessing
+    csv_path = preprocessing()
 
-    # Task.current_task().connect({"output_dir": output_dir})
-
-    # Fetch dataset from ClearML
-    dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
-    root_dir = dataset.get_local_copy()
-
-    csv_path = preprocessing(root_dir)
+    # Step 2: Training / Inference
     inference_dir = training(csv_path, output_dir)
+
+    # Step 3: Evaluation
     metrics = evaluation(inference_dir)
+
+    logger.report_text("Pipeline completed successfully")
     return metrics
 
 
-@PipelineDecorator.component(name="preprocessing", return_values=["csv_path"])
-def preprocessing(root_dir: str) -> str:
+# ----------------------------------------------------
+# Components
+# ----------------------------------------------------
+@PipelineDecorator.component(
+    name="preprocessing",
+    return_values=["csv_path"],
+    cache=True,
+    task_type=Task.TaskTypes.data_processing,
+)
+def preprocessing(
+    CLEARML_DATASET_ID: str = "c1fca92f4cc1402fac5fd6026c1128e5",
+    CLEARML_DATASET_NAME: str = "AR_TryOn_Train"
+) -> str:
     """
-    Preprocess images and masks and save as CSV
+    Fetch ClearML dataset, convert numpy arrays to PNGs, create CSV for inference.
     """
-    root = Path(root_dir)
-    # Load the npy files from ClearML dataset
-    images = np.load(root / "image.npy")
-    masks = np.load(root / "cloth_mask.npy")
+    task = Task.current_task()
+    logger = task.get_logger()
 
+    # Fetch dataset from ClearML
+    dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
+    root = Path(dataset.get_local_copy())
+    logger.report_text(f"Dataset local path: {root}")
+
+    # Load numpy arrays
+    cloth_images = np.load(root / "train_cloth.npy")
+    cloth_masks = np.load(root / "train_cloth_mask.npy")
+    person_images = np.load(root / "train_image.npy")
+
+    # Create CSV file mapping all images
     csv_file = root / "dataset.csv"
     with open(csv_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["person_image", "mask_image"])
+        writer = csv.DictWriter(f, fieldnames=["person_image", "mask_image", "cloth_image"])
         writer.writeheader()
-        for i in range(len(images)):
-            person_img_path = root / f"img_{i}.png"
+
+        for i in range(len(cloth_images)):
+            person_img_path = root / f"person_{i}.png"
             mask_img_path = root / f"mask_{i}.png"
-            Image.fromarray(images[i]).save(person_img_path)
-            Image.fromarray(masks[i]).save(mask_img_path)
+            cloth_img_path = root / f"cloth_{i}.png"
+
+            Image.fromarray(person_images[i]).save(person_img_path)
+            Image.fromarray(cloth_masks[i]).save(mask_img_path)
+            Image.fromarray(cloth_images[i]).save(cloth_img_path)
+
             writer.writerow({
                 "person_image": str(person_img_path),
-                "mask_image": str(mask_img_path)
+                "mask_image": str(mask_img_path),
+                "cloth_image": str(cloth_img_path)
             })
 
+    logger.report_text(f"Preprocessing completed. CSV saved at: {csv_file}")
     return str(csv_file)
 
 
-@PipelineDecorator.component(name="training", return_values=["inference_dir"])
+@PipelineDecorator.component(
+    name="training",
+    return_values=["inference_dir"],
+    cache=False,
+    task_type=Task.TaskTypes.training,
+)
 def training(csv_path: str, output_dir: str) -> str:
     """
-    Run ControlNet inference to generate virtual try-on images
+    Run ControlNet inference to generate virtual try-on images.
     """
     from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
     from controlnet_aux import OpenposeDetector
 
-    # IMPORTANT: The 'device' here will be the device available on the ClearML Agent
-    # If your agent has a GPU, it will use 'cuda'. If not, it will fall back to 'cpu'.
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if device.type == "cuda" else torch.float32
-
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
     task = Task.current_task()
     logger = task.get_logger()
 
-    # Load ControlNet models - These will be downloaded by the agent
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.float16 if device.type == "cuda" else torch.float32
+
+    logger.report_text("Initializing ControlNet models...")
+
+    # Load ControlNet models
     pose_controlnet = ControlNetModel.from_pretrained(
         "lllyasviel/sd-controlnet-openpose", torch_dtype=dtype
     )
@@ -95,79 +126,97 @@ def training(csv_path: str, output_dir: str) -> str:
         controlnet=[pose_controlnet, seg_controlnet],
         torch_dtype=dtype
     ).to(device)
-    pipe.safety_checker = lambda images, **kwargs: (images, False)
 
+    pipe.safety_checker = lambda images, **kwargs: (images, False)
     pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
-    def run_controlnet_inference(person_img_path, mask_img_path, prompt="Virtual try-on"):
-        person_img = Image.open(person_img_path).convert("RGB").resize((512, 512))
-        mask_img = Image.open(mask_img_path).convert("RGB").resize((512, 512))
-        pose_img = pose_detector(person_img)
-        if isinstance(pose_img, np.ndarray):
-            pose_img = Image.fromarray(pose_img)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-        with torch.autocast(device_type=device.type, dtype=dtype):
-            result = pipe(
-                prompt=prompt,
-                image=person_img,
-                control_image=[pose_img, mask_img],
-                num_inference_steps=8
-            ).images[0]
-        return result
-
-    with Path(csv_path).open(newline='') as f:
+    # Read CSV
+    with open(csv_path, newline='') as f:
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    for row_num, row in enumerate(rows, start=1):
+    logger.report_text(f"Processing {len(rows)} image pairs...")
+
+    for idx, row in enumerate(rows, start=1):
         try:
-            person_path = row['person_image']
-            mask_path = row['mask_image']
-            stem = Path(person_path).name
+            person_img = Image.open(row['person_image']).convert("RGB").resize((512, 512))
+            mask_img = Image.open(row['mask_image']).convert("RGB").resize((512, 512))
+            cloth_img = Image.open(row['cloth_image']).convert("RGB").resize((512, 512))
 
-            result = run_controlnet_inference(person_path, mask_path)
-            out_path = output_path / f"tryon_{stem}"
-            result.save(out_path)
+            pose_img = pose_detector(person_img)
+            if isinstance(pose_img, np.ndarray):
+                pose_img = Image.fromarray(pose_img)
 
-            logger.report_image("Try-On Result", "Dual ControlNet", row_num, str(out_path))
-            print(f"[Row {row_num}] Processed {stem}")
+            # Inference
+            with torch.autocast(device_type=device.type, dtype=dtype):
+                result = pipe(
+                    prompt="Virtual try-on of the selected clothing item",
+                    image=person_img,
+                    control_image=[pose_img, mask_img],
+                    num_inference_steps=8
+                ).images[0]
+
+            out_file = output_path / f"tryon_{Path(row['person_image']).name}"
+            result.save(out_file)
+
+            logger.report_image(
+                title="Try-On Result",
+                series="ControlNet Output",
+                iteration=idx,
+                image=str(out_file)
+            )
+            logger.report_text(f"[{idx}/{len(rows)}] Processed {row['person_image']}")
+
         except Exception as e:
-            print(f"[Row {row_num}] Failed on {row.get('person_image', 'unknown')}: {e}")
+            logger.report_text(f"[{idx}] Failed: {e}")
 
+    logger.report_text(f"Inference completed. Results saved in {output_path}")
     return str(output_path)
 
 
-@PipelineDecorator.component(name="evaluation", return_values=["metrics"])
+@PipelineDecorator.component(
+    name="evaluation",
+    return_values=["metrics"],
+    cache=False,
+    task_type=Task.TaskTypes.testing,
+)
 def evaluation(inference_dir: str) -> dict:
     """
-    Compute simple image metrics for generated images
+    Compute simple evaluation metrics for generated try-on images.
     """
+    task = Task.current_task()
+    logger = task.get_logger()
     output_path = Path(inference_dir)
-    scores = []
+
+    metrics = []
     for img_file in output_path.glob("tryon_*.png"):
         try:
             img = Image.open(img_file).convert("RGB")
             arr = np.array(img)
-            scores.append({
+            metrics.append({
                 "file": img_file.name,
                 "mean_pixel": float(arr.mean()),
                 "std_pixel": float(arr.std())
             })
         except Exception as e:
-            print(f"Failed to evaluate {img_file.name}: {e}")
-    print(f"Evaluated {len(scores)} images")
-    return {"image_stats": scores}
+            logger.report_text(f"Failed to evaluate {img_file.name}: {e}")
+
+    logger.report_text(f"Evaluation completed. {len(metrics)} images processed.")
+    return {"image_metrics": metrics}
 
 
+# ----------------------------------------------------
+# Pipeline Entry Point
+# ----------------------------------------------------
 if __name__ == "__main__":
     pipeline_instance = full_pipeline(
-        output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs",
+        output_dir=r"C:/Users/shris/OneDrive - UTS/Documents/GitHub/AR_STOC/controlnet_outputs"
     )
 
-    # Explicitly set the repo for the agent
     pipeline_instance.start(
-        queue="ar_stoc",
         repo="https://github.com/ShristiHamal/AR_STOC.git",
-        branch="main" 
+        branch="main"
     )
-    
