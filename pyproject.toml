@@ -9,8 +9,8 @@ packages = [{ include = "app" }]
 
 [tool.poetry.dependencies]
 python = ">=3.9.13"
-torch = "2.0.1"
-torchvision = "0.15.2"
+torch= ">=2.4.1"
+torchvision=">0.19.1"
 clearml = "^2.0.2"
 diffusers = "0.19.1"
 transformers = "4.33.2"
