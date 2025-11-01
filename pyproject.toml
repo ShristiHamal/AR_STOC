@@ -8,31 +8,22 @@ license = "MIT"
 packages = [{ include = "app" }]
 
 [tool.poetry.dependencies]
-python = ">=3.9.13"
+python = ">=3.9,<3.10"
 
-torch = "2.0.1+cu118"
-torchvision = "0.15.2+cu118"
-torchaudio = "2.0.2+cu118"
-
-
-clearml = "^2.0.2"
-diffusers = "0.19.1"
-transformers = "4.33.2"
-huggingface-hub = "0.16.4"
-accelerate = "0.20.3"
-safetensors = "^0.6.2"
-Pillow = ">=9.5,<12"  # Compatible with Python 3.9
-numpy = "1.26.4"
-controlnet-aux = "^0.0.6"
-matplotlib = "^3.7"
-protobuf = "4.22.1"
-python-dotenv = "^1.1.1"
-opencv-python = "^4.11.0"
-scikit-image = "^0.24.0"
-timm = "^1.0.20"
-einops = "^0.8.1"
-streamlit = "^1.39.0" 
-setuptools = "80.9.0"
+# Core dependencies
+torch = "^2.0.1"
+torchvision = "^0.15.2"
+torchaudio = "^2.0.2"
+diffusers = "0.30.2"
+transformers = "4.44.2"
+accelerate = "0.34.2"
+safetensors = "0.4.5"
+controlnet-aux = "0.0.8"
+opencv-python-headless = "*"
+mediapipe = "*"
+clearml = "*"
+clearml-agent = "*"
+streamlit = "*"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.0.0"
