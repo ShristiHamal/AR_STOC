@@ -10,6 +10,7 @@ import pandas as pd
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
 from contextlib import nullcontext
+import json
 
 # -------------------- Preprocessing -------------------- #
 @PipelineDecorator.component(return_values=["df"])
@@ -36,10 +37,10 @@ def preprocess_data(dataset_root: str):
 
         if cloth_match.exists() and mask_match.exists() and pose_match.exists():
             data.append({
-                "person_image": str(img_file),
-                "cloth_image": str(cloth_match),
-                "mask_image": str(mask_match),
-                "pose_json": str(pose_match)
+                "image": str(img_file),
+                "cloth": str(cloth_match),
+                "cloth-mask": str(mask_match),
+                "openpose_json": str(pose_match)
             })
 
     df = pd.DataFrame(data)
@@ -83,12 +84,14 @@ def run_controlnet_inference(df, output_dir: str):
         if device.type == "cuda" else nullcontext()
     )
 
-    for idx, row in df.iterrows():  # full dataset
-        person_img = Image.open(row["person_image"]).convert("RGB")
-        cloth_img = Image.open(row["cloth_image"]).convert("RGB")
-        mask_img = Image.open(row["mask_image"]).convert("RGB")
+    for idx, row in df.iterrows():  # process full dataset
+        person_img = Image.open(row["image"]).convert("RGB")
+        cloth_img = Image.open(row["cloth"]).convert("RGB")
+        mask_img = Image.open(row["cloth-mask"]).convert("RGB")
+        pose_json_path = row["openpose_json"]
 
-        # Optionally, you can load the pose from JSON instead of detecting
+        # Load pose JSON if needed (optional, otherwise use detector)
+        # Example: pose_detector can take image directly
         pose_img = pose_detector(person_img)
         if isinstance(pose_img, np.ndarray):
             pose_img = Image.fromarray(pose_img)
