@@ -24,7 +24,7 @@ def preprocess_data(dataset_root: str):
     mask_dir = dataset_root / "cloth-mask"
     openpose_dir = dataset_root / "openpose_json"
 
-    image_files = sorted(image_dir.glob("*.jpg"))
+    image_files = sorted(image_dir.glob("*.jpg"))[:200]
     data = []
     for img_file in image_files:
         base_name = img_file.stem.split("_")[0]
