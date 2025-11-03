@@ -2,7 +2,7 @@ import streamlit as st
 from PIL import Image
 import cv2
 import tempfile
-from app.controlnet_inference import run_controlnet_inference
+from controlnet_inference import run_controlnet_inference
 
 st.set_page_config(page_title="AR Smart Try-On", layout="wide")
 st.title("AR Smart Try-On")
