@@ -1,6 +1,6 @@
 # app/pipeline_decorator.py
 
-from clearml import PipelineDecorator, Task, Logger
+from clearml import PipelineDecorator, Logger
 from pathlib import Path
 from PIL import Image
 import torch
@@ -24,13 +24,15 @@ def preprocess_data(dataset_root: str):
     mask_dir = dataset_root / "cloth-mask"
     openpose_dir = dataset_root / "openpose_json"
 
-    image_files = sorted(image_dir.glob("*.jpg"))[:200]
+    image_files = sorted(image_dir.glob("*.jpg"))[:200]  # adjust as needed
     data = []
+
     for img_file in image_files:
-        base_name = img_file.stem.split("_")[0]
-        cloth_match = cloth_dir / f"{base_name}_00.jpg"
-        mask_match = mask_dir / f"{base_name}_00.jpg"
-        pose_match = openpose_dir / f"{base_name}_00.json"
+        base_name = "_".join(img_file.stem.split("_")[:2])  # e.g., "00001_00"
+
+        cloth_match = cloth_dir / f"{base_name}.jpg"
+        mask_match = mask_dir / f"{base_name}.jpg"
+        pose_match = openpose_dir / f"{base_name}_keypoints.json"
 
         if cloth_match.exists() and mask_match.exists() and pose_match.exists():
             data.append({
@@ -81,11 +83,12 @@ def run_controlnet_inference(df, output_dir: str):
         if device.type == "cuda" else nullcontext()
     )
 
-    for idx, row in df.head(5).iterrows():  # change .head(5) for full dataset
+    for idx, row in df.iterrows():  # full dataset
         person_img = Image.open(row["person_image"]).convert("RGB")
         cloth_img = Image.open(row["cloth_image"]).convert("RGB")
         mask_img = Image.open(row["mask_image"]).convert("RGB")
 
+        # Optionally, you can load the pose from JSON instead of detecting
         pose_img = pose_detector(person_img)
         if isinstance(pose_img, np.ndarray):
             pose_img = Image.fromarray(pose_img)
