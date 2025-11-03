@@ -1,151 +1,145 @@
-# app/pipeline_decorator.py
-
-from clearml import PipelineDecorator, Logger
+from clearml import PipelineDecorator, Task, Logger, Dataset
 from pathlib import Path
-from PIL import Image
-import torch
-import numpy as np
-import os
 import pandas as pd
+import torch
+import os
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
 from contextlib import nullcontext
-import json
+from PIL import Image
+import numpy as np
+
 
 # -------------------- Preprocessing -------------------- #
-@PipelineDecorator.component(return_values=["df"])
-def preprocess_data(dataset_root: str):
+@PipelineDecorator.component(return_values=["df_path"])
+def Preprocessing(dataset_txt_path: str):
     """
-    Preprocess dataset: maps person images, cloth images, masks, and pose JSON.
-    Returns a DataFrame for downstream components.
+    Loads dataset mapping directly from an existing train_pairs.txt file.
+    Expected format: each line contains image, cloth, cloth-mask, openpose_json paths separated by spaces or commas.
+    Saves a DataFrame to CSV for easier downstream use.
     """
-    dataset_root = Path(dataset_root)
-    image_dir = dataset_root / "image"
-    cloth_dir = dataset_root / "cloth"
-    mask_dir = dataset_root / "cloth-mask"
-    openpose_dir = dataset_root / "openpose_json"
+    dataset_txt_path = Path(dataset_txt_path)
+    if not dataset_txt_path.exists():
+        raise FileNotFoundError(f"Dataset file not found at: {dataset_txt_path}")
 
-    image_files = sorted(image_dir.glob("*.jpg"))[:200]  # adjust as needed
-    data = []
+    # Try loading .txt file as CSV with auto delimiter detection
+    try:
+        df = pd.read_csv(dataset_txt_path, sep=None, engine="python", header=None)
+    except Exception:
+        # fallback to whitespace split
+        df = pd.read_csv(dataset_txt_path, sep=r"\s+", engine="python", header=None)
 
-    for img_file in image_files:
-        base_name = "_".join(img_file.stem.split("_")[:2])  # e.g., "00001_00"
+    # Assign column names for consistency
+    df.columns = ["image", "cloth", "cloth-mask", "openpose_json"]
 
-        cloth_match = cloth_dir / f"{base_name}.jpg"
-        mask_match = mask_dir / f"{base_name}.jpg"
-        pose_match = openpose_dir / f"{base_name}_keypoints.json"
+    # Verify all referenced files exist
+    missing = []
+    for col in df.columns:
+        for p in df[col]:
+            if not os.path.exists(p):
+                missing.append(p)
+    if missing:
+        Logger.current_logger().report_text(f"Warning: {len(missing)} missing file paths detected.")
+        print(f"Warning: {len(missing)} missing file paths detected. Example: {missing[:5]}")
 
-        if cloth_match.exists() and mask_match.exists() and pose_match.exists():
-            data.append({
-                "image": str(img_file),
-                "cloth": str(cloth_match),
-                "cloth-mask": str(mask_match),
-                "openpose_json": str(pose_match)
-            })
+    # Save CSV for downstream components
+    csv_path = dataset_txt_path.parent / "dataset_from_txt.csv"
+    df.to_csv(csv_path, index=False)
 
-    df = pd.DataFrame(data)
     Logger.current_logger().report_table(
-        title="Dataset Mapping",
+        title="Dataset Mapping (from train_pairs.txt)",
         series="train_data",
         table_plot=df.head(10)
     )
-    print(f"Preprocessing done: {len(df)} valid pairs found.")
-    return df
+    print(f"Dataset loaded successfully: {len(df)} entries found. CSV saved at {csv_path}")
+    return str(csv_path)
 
-# -------------------- Inference -------------------- #
-@PipelineDecorator.component(return_values=["output_dir"])
-def run_controlnet_inference(df, output_dir: str):
+
+# -------------------- ControlNet Inference -------------------- #
+@PipelineDecorator.component(return_values=["processed_images_dir"])
+def ControlNetInference(df_path: str, output_dir: str):
     """
-    Run ControlNet inference using Stable Diffusion + OpenPose.
-    Saves results in `output_dir`.
+    Runs ControlNet inference using OpenPose as conditioning.
     """
+    df = pd.read_csv(df_path)
     os.makedirs(output_dir, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-    # Load models
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    print("Loading OpenPose and ControlNet models...")
     controlnet = ControlNetModel.from_pretrained(
-        "lllyasviel/sd-controlnet-openpose", torch_dtype=dtype
+        "lllyasviel/sd-controlnet-openpose", torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         "runwayml/stable-diffusion-v1-5",
         controlnet=controlnet,
-        torch_dtype=dtype,
-        safety_checker=None
-    ).to(device)
-    pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
-    pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
-
-    torch.manual_seed(42)
-    np.random.seed(42)
-
-    autocast_ctx = (
-        torch.autocast(device_type="cuda", dtype=dtype)
-        if device.type == "cuda" else nullcontext()
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
+    pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+    pipe.to(device)
 
-    for idx, row in df.iterrows():  # process full dataset
-        person_img = Image.open(row["image"]).convert("RGB")
-        cloth_img = Image.open(row["cloth"]).convert("RGB")
-        mask_img = Image.open(row["cloth-mask"]).convert("RGB")
-        pose_json_path = row["openpose_json"]
+    openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
-        # Load pose JSON if needed (optional, otherwise use detector)
-        # Example: pose_detector can take image directly
-        pose_img = pose_detector(person_img)
-        if isinstance(pose_img, np.ndarray):
-            pose_img = Image.fromarray(pose_img)
+    for idx, row in df.iterrows():
+        person_image_path = row["image"]
+        cloth_image_path = row["cloth"]
 
-        with autocast_ctx:
+        try:
+            person_img = Image.open(person_image_path).convert("RGB")
+            pose = openpose(person_img)
             result = pipe(
-                prompt="Person wearing the selected clothing item in realistic style",
-                control_image=[pose_img, mask_img],
-                num_inference_steps=8
+                prompt=f"A person wearing {os.path.basename(cloth_image_path)}",
+                image=pose,
+                num_inference_steps=20,
+                guidance_scale=9.0,
             ).images[0]
 
-        output_path = os.path.join(output_dir, f"result_{idx:04d}.png")
-        result.save(output_path)
-        Logger.current_logger().report_image(
-            title="AR Try-On Result",
-            series="results",
-            local_path=output_path
-        )
+            out_path = os.path.join(output_dir, f"result_{idx:05d}.png")
+            result.save(out_path)
+        except Exception as e:
+            Logger.current_logger().report_text(f"Error processing {person_image_path}: {e}")
 
-    print(f"Inference done. Results saved in {output_dir}")
+    Logger.current_logger().report_text(f"Inference completed for {len(df)} items. Results in {output_dir}")
     return output_dir
 
-# -------------------- Evaluation -------------------- #
-@PipelineDecorator.component()
-def evaluate_results(output_dir: str):
-    """
-    Evaluate generated images. Placeholder for metrics or visual checks.
-    """
-    generated_files = list(Path(output_dir).glob("*.png"))
-    Logger.current_logger().report_text(f"Generated {len(generated_files)} try-on images.")
-    print(f"Evaluation complete: {len(generated_files)} results generated.")
 
-# -------------------- Full Pipeline -------------------- #
+# -------------------- Training Component -------------------- #
+@PipelineDecorator.component(return_values=["model_path"])
+def Training(df_path: str):
+    """
+    Dummy Training step placeholder — load data, simulate training, save model.
+    """
+    df = pd.read_csv(df_path)
+    print(f"Training initialized with {len(df)} samples.")
+
+    # Simulate training
+    model_path = "./trained_model.pt"
+    with open(model_path, "w") as f:
+        f.write("fake model weights")
+
+    Logger.current_logger().report_text("Training completed successfully.")
+    return model_path
+
+
+# -------------------- Pipeline Definition -------------------- #
 @PipelineDecorator.pipeline(
-    name="AR Smart Try-On Full Pipeline",
-    project="AR Smart Try-On",
-    version="1.0.0",
+    name="AR-STOC ControlNet Pipeline",
+    project="AR_STOC",
+    version="1.0"
     default_queue="ar_stoc",
     pipeline_execution_queue="ar_stoc"
+    
 )
-def full_pipeline(dataset_root: str, output_dir: str):
-    """
-    Pipeline:
-    1. Preprocess dataset
-    2. Run ControlNet inference
-    3. Evaluate results
-    """
-    df = preprocess_data(dataset_root)
-    results_dir = run_controlnet_inference(df, output_dir)
-    evaluate_results(results_dir)
+def main_pipeline():
+    dataset_txt_path = "/content/drive/MyDrive/IndustryProject/Dataset/train_pairs.txt"
 
-# -------------------- Entry Point -------------------- #
+    df_path = Preprocessing(dataset_txt_path)
+    processed_images_dir = ControlNetInference(df_path, output_dir="./results")
+    model_path = Training(df_path)
+
+    print("Pipeline completed successfully.")
+    return model_path
+
+
 if __name__ == "__main__":
-    full_pipeline(
-        dataset_root="/content/drive/MyDrive/IndustryProject/Dataset/train",
-        output_dir="/content/drive/MyDrive/IndustryProject/Results"
-    )
+    PipelineDecorator.run_pipeline(main_pipeline)

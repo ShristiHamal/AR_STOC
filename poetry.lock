@@ -551,27 +551,27 @@ test-no-images = ["pytest", "pytest-cov", "pytest-rerunfailures", "pytest-xdist"
 
 [[package]]
 name = "controlnet-aux"
-version = "0.0.8"
+version = "0.0.10"
 description = "Auxillary models for controlnet"
 optional = false
 python-versions = ">=3.7.0"
 groups = ["main"]
 files = [
-    {file = "controlnet_aux-0.0.8-py3-none-any.whl", hash = "sha256:637ed006de660a5caa6a1bc0e80edd9b61faf46ce24c459a7ce6a7f5c0e74727"},
-    {file = "controlnet_aux-0.0.8.tar.gz", hash = "sha256:53d9147afd2368778bc73b464a8576d373f7edddcf9d030e04c4329174cb58a8"},
+    {file = "controlnet_aux-0.0.10-py3-none-any.whl", hash = "sha256:cad3480d62c7df1ae569258a659c88d730873323d2adbb9f6f7aebd87917df3b"},
+    {file = "controlnet_aux-0.0.10.tar.gz", hash = "sha256:31dc265a54448bdcee033a130b47423c80587fa35ccac752113af1b4d48f5183"},
 ]
 
 [package.dependencies]
 einops = "*"
 filelock = "*"
-huggingface-hub = "*"
-importlib-metadata = "*"
+huggingface_hub = "*"
+importlib_metadata = "*"
 numpy = "*"
 opencv-python-headless = "*"
 Pillow = "*"
 scikit-image = "*"
 scipy = "*"
-timm = "<=0.6.7"
+timm = "*"
 torch = "*"
 torchvision = "*"
 
@@ -2801,6 +2801,10 @@ files = [
     {file = "safetensors-0.4.5.tar.gz", hash = "sha256:d73de19682deabb02524b3d5d1f8b3aaba94c72f1bbfc7911b9b9d5d391c0310"},
 ]
 
+[package.dependencies]
+numpy = {version = ">=1.21.6", optional = true, markers = "extra == \"numpy\""}
+torch = {version = ">=1.10", optional = true, markers = "extra == \"torch\""}
+
 [package.extras]
 all = ["safetensors[jax]", "safetensors[numpy]", "safetensors[paddlepaddle]", "safetensors[pinned-tf]", "safetensors[quality]", "safetensors[testing]", "safetensors[torch]"]
 dev = ["safetensors[all]"]
@@ -3122,18 +3126,21 @@ zarr = ["fsspec", "zarr"]
 
 [[package]]
 name = "timm"
-version = "0.6.7"
-description = "(Unofficial) PyTorch Image Models"
+version = "1.0.21"
+description = "PyTorch Image Models"
 optional = false
-python-versions = ">=3.6"
+python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "timm-0.6.7-py3-none-any.whl", hash = "sha256:4bbd7a5c9ae462ec7fec3d99ffc62ac2012010d755248e3de778d50bce5f6186"},
-    {file = "timm-0.6.7.tar.gz", hash = "sha256:340f907906695092cf53fe01a476aa14ad15763545b654bc122ea0daef23071f"},
+    {file = "timm-1.0.21-py3-none-any.whl", hash = "sha256:e7428083af9f68af5ef1d50724946d9b6a2ccba8688c3e5fc9370f59f76e50cf"},
+    {file = "timm-1.0.21.tar.gz", hash = "sha256:aa372fe43a85ed6ea0dd14945dac724c842e6e373779e2a2afd67d7dc1b82c4c"},
 ]
 
 [package.dependencies]
-torch = ">=1.4"
+huggingface_hub = "*"
+pyyaml = "*"
+safetensors = "*"
+torch = "*"
 torchvision = "*"
 
 [[package]]
@@ -3707,4 +3714,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.10"
-content-hash = "d95a0ab4377d4d6c61539a7090a583e46a304a60908a8ecd812d3bbda53d9658"
+content-hash = "668a92d5eaa3ea0f0ebcc0f41c3bec8b64b3887d91bc81f39ddf7589bdc9238f"
