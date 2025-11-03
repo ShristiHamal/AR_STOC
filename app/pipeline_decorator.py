@@ -1,48 +1,38 @@
-from clearml import PipelineDecorator, Task, Logger, Dataset
+from clearml import PipelineDecorator, Logger
 from pathlib import Path
 import pandas as pd
 import torch
 import os
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
-from contextlib import nullcontext
 from PIL import Image
-import numpy as np
 
 
 # -------------------- Preprocessing -------------------- #
 @PipelineDecorator.component(return_values=["df_path"])
 def Preprocessing(dataset_txt_path: str):
     """
-    Loads dataset mapping directly from an existing train_pairs.txt file.
-    Expected format: each line contains image, cloth, cloth-mask, openpose_json paths separated by spaces or commas.
-    Saves a DataFrame to CSV for easier downstream use.
+    Loads dataset mapping directly from train_pairs.txt.
+    Expected format: each line contains image, cloth, cloth-mask, openpose_json paths.
+    Saves CSV for downstream components.
     """
     dataset_txt_path = Path(dataset_txt_path)
     if not dataset_txt_path.exists():
         raise FileNotFoundError(f"Dataset file not found at: {dataset_txt_path}")
 
-    # Try loading .txt file as CSV with auto delimiter detection
     try:
         df = pd.read_csv(dataset_txt_path, sep=None, engine="python", header=None)
     except Exception:
-        # fallback to whitespace split
         df = pd.read_csv(dataset_txt_path, sep=r"\s+", engine="python", header=None)
 
-    # Assign column names for consistency
     df.columns = ["image", "cloth", "cloth-mask", "openpose_json"]
 
-    # Verify all referenced files exist
-    missing = []
-    for col in df.columns:
-        for p in df[col]:
-            if not os.path.exists(p):
-                missing.append(p)
+    # Check for missing files
+    missing = [p for col in df.columns for p in df[col] if not os.path.exists(p)]
     if missing:
         Logger.current_logger().report_text(f"Warning: {len(missing)} missing file paths detected.")
-        print(f"Warning: {len(missing)} missing file paths detected. Example: {missing[:5]}")
+        print(f"Warning: {len(missing)} missing file paths. Example: {missing[:5]}")
 
-    # Save CSV for downstream components
     csv_path = dataset_txt_path.parent / "dataset_from_txt.csv"
     df.to_csv(csv_path, index=False)
 
@@ -51,13 +41,13 @@ def Preprocessing(dataset_txt_path: str):
         series="train_data",
         table_plot=df.head(10)
     )
-    print(f"Dataset loaded successfully: {len(df)} entries found. CSV saved at {csv_path}")
+    print(f"Dataset loaded successfully: {len(df)} entries. CSV saved at {csv_path}")
     return str(csv_path)
 
 
 # -------------------- ControlNet Inference -------------------- #
 @PipelineDecorator.component(return_values=["processed_images_dir"])
-def ControlNetInference(df_path: str, output_dir: str):
+def ControlNetInference(df_path: str, output_dir: str, sample_limit: int = None):
     """
     Runs ControlNet inference using OpenPose as conditioning.
     """
@@ -65,30 +55,29 @@ def ControlNetInference(df_path: str, output_dir: str):
     os.makedirs(output_dir, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-    print("Loading OpenPose and ControlNet models...")
+    print(f"Using device: {device}, dtype: {dtype}")
     controlnet = ControlNetModel.from_pretrained(
-        "lllyasviel/sd-controlnet-openpose", torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+        "lllyasviel/sd-controlnet-openpose", torch_dtype=dtype
     )
     pipe = StableDiffusionControlNetPipeline.from_pretrained(
         "runwayml/stable-diffusion-v1-5",
         controlnet=controlnet,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-    )
+        torch_dtype=dtype
+    ).to(device)
     pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
-    pipe.to(device)
 
     openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
+    logger = Logger.current_logger()
 
-    for idx, row in df.iterrows():
-        person_image_path = row["image"]
-        cloth_image_path = row["cloth"]
-
+    df_iter = df if sample_limit is None else df.head(sample_limit)
+    for idx, row in df_iter.iterrows():
         try:
-            person_img = Image.open(person_image_path).convert("RGB")
+            person_img = Image.open(row["image"]).convert("RGB")
             pose = openpose(person_img)
             result = pipe(
-                prompt=f"A person wearing {os.path.basename(cloth_image_path)}",
+                prompt=f"A person wearing {os.path.basename(row['cloth'])}",
                 image=pose,
                 num_inference_steps=20,
                 guidance_scale=9.0,
@@ -96,10 +85,11 @@ def ControlNetInference(df_path: str, output_dir: str):
 
             out_path = os.path.join(output_dir, f"result_{idx:05d}.png")
             result.save(out_path)
+            logger.report_image(title="Try-On Result", series="results", local_path=out_path)
         except Exception as e:
-            Logger.current_logger().report_text(f"Error processing {person_image_path}: {e}")
+            logger.report_text(f"Error processing {row['image']}: {e}")
 
-    Logger.current_logger().report_text(f"Inference completed for {len(df)} items. Results in {output_dir}")
+    logger.report_text(f"Inference completed for {len(df_iter)} items. Results saved in {output_dir}")
     return output_dir
 
 
@@ -107,12 +97,11 @@ def ControlNetInference(df_path: str, output_dir: str):
 @PipelineDecorator.component(return_values=["model_path"])
 def Training(df_path: str):
     """
-    Dummy Training step placeholder — load data, simulate training, save model.
+    Dummy training placeholder.
     """
     df = pd.read_csv(df_path)
     print(f"Training initialized with {len(df)} samples.")
 
-    # Simulate training
     model_path = "./trained_model.pt"
     with open(model_path, "w") as f:
         f.write("fake model weights")
@@ -121,14 +110,13 @@ def Training(df_path: str):
     return model_path
 
 
-# -------------------- Pipeline Definition -------------------- #
+# -------------------- Full Pipeline -------------------- #
 @PipelineDecorator.pipeline(
-    name="AR-STOC ControlNet Pipeline",
-    project="AR_STOC",
+    name="AR Smart Try-On Full Pipeline",
+    project="AR Smart Try-On",
     version="1.0",
     default_queue="ar_stoc",
     pipeline_execution_queue="ar_stoc"
-    
 )
 def main_pipeline():
     dataset_txt_path = "/content/drive/MyDrive/IndustryProject/Dataset/train_pairs.txt"
@@ -141,5 +129,6 @@ def main_pipeline():
     return model_path
 
 
+# -------------------- Entry Point -------------------- #
 if __name__ == "__main__":
     main_pipeline()
