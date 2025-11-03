@@ -125,7 +125,7 @@ def Training(df_path: str):
 @PipelineDecorator.pipeline(
     name="AR-STOC ControlNet Pipeline",
     project="AR_STOC",
-    version="1.0"
+    version="1.0",
     default_queue="ar_stoc",
     pipeline_execution_queue="ar_stoc"
     
