@@ -142,4 +142,4 @@ def main_pipeline():
 
 
 if __name__ == "__main__":
-    PipelineDecorator.run_pipeline(main_pipeline)
+    main_pipeline()
