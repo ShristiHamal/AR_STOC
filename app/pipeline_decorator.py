@@ -1,4 +1,4 @@
-from clearml import PipelineDecorator, Logger
+from clearml import PipelineDecorator, Dataset, Logger
 from pathlib import Path
 import pandas as pd
 import torch
@@ -8,16 +8,40 @@ from controlnet_aux import OpenposeDetector
 from PIL import Image
 import numpy as np
 
-# -------------------- Preprocessing -------------------- #
+
+# -------------------- Dataset Upload + Preprocessing -------------------- #
 @PipelineDecorator.component(return_values=["df_path"])
-def Preprocessing(dataset_txt_path: str):
+def Preprocessing(local_dataset_path: str):
     """
-    Reads train_pairs.txt and saves a CSV for downstream components.
+    Uploads dataset to ClearML (if not already uploaded),
+    reads train_pairs.txt, and saves a CSV for downstream components.
     """
-    dataset_txt_path = Path(dataset_txt_path)
+    dataset_path = Path(local_dataset_path)
+    dataset_txt_path = dataset_path / "train_pairs.txt"
+
     if not dataset_txt_path.exists():
         raise FileNotFoundError(f"Dataset file not found at: {dataset_txt_path}")
 
+    # ---- Upload dataset to ClearML (if not already uploaded) ---- #
+    dataset_name = "AR_TryOn_Dataset"
+    dataset_project = "AR_STOC"
+
+    try:
+        dataset = Dataset.get(dataset_name=dataset_name, dataset_project=dataset_project)
+        print(f"Dataset already exists in ClearML: {dataset.id}")
+    except Exception:
+        print(f"Uploading dataset from {dataset_path} to ClearML...")
+        dataset = Dataset.create(
+            dataset_name=dataset_name,
+            dataset_project=dataset_project,
+            dataset_version="1.0"
+        )
+        dataset.add_files(str(dataset_path))
+        dataset.upload()
+        dataset.finalize()
+        print(f"Dataset uploaded successfully: {dataset.id}")
+
+    # ---- Read and process the dataset file ---- #
     try:
         df = pd.read_csv(dataset_txt_path, sep=None, engine="python", header=None)
     except Exception:
@@ -33,8 +57,9 @@ def Preprocessing(dataset_txt_path: str):
         series="train_data",
         table_plot=df.head(10)
     )
-    print(f"Preprocessing done: {len(df)} entries saved to {csv_path}")
+    print(f" Preprocessing done: {len(df)} entries saved to {csv_path}")
     return str(csv_path)
+
 
 # -------------------- ControlNet Inference -------------------- #
 @PipelineDecorator.component(return_values=["processed_images_dir"])
@@ -78,6 +103,7 @@ def ControlNetInference(df_path: str, output_dir: str):
     logger.report_text(f"Inference completed for {len(df)} items. Results in {output_dir}")
     return output_dir
 
+
 # -------------------- Training Component -------------------- #
 @PipelineDecorator.component(return_values=["model_path"])
 def Training(df_path: str):
@@ -90,6 +116,7 @@ def Training(df_path: str):
 
     Logger.current_logger().report_text("Training completed successfully.")
     return model_path
+
 
 # -------------------- Evaluation -------------------- #
 @PipelineDecorator.component(return_values=["metrics"])
@@ -108,6 +135,7 @@ def Evaluation(processed_images_dir: str):
     Logger.current_logger().report_text(f"Evaluation completed for {len(results)} images.")
     return {"metrics": results}
 
+
 # -------------------- Full Pipeline -------------------- #
 @PipelineDecorator.pipeline(
     name="AR Smart Try-On Full Pipeline",
@@ -117,15 +145,16 @@ def Evaluation(processed_images_dir: str):
     pipeline_execution_queue="ar_stoc"
 )
 def main_pipeline():
-    dataset_txt_path = "/content/drive/MyDrive/IndustryProject/Dataset/train_pairs.txt"
+    local_dataset_path = "/content/drive/MyDrive/IndustryProject/Dataset"
 
-    df_path = Preprocessing(dataset_txt_path)
+    df_path = Preprocessing(local_dataset_path)
     processed_images_dir = ControlNetInference(df_path, output_dir="./results")
     model_path = Training(df_path)
     metrics = Evaluation(processed_images_dir)
 
     print("Pipeline completed successfully.")
     return metrics
+
 
 if __name__ == "__main__":
     main_pipeline()
