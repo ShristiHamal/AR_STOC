@@ -22,7 +22,7 @@ from controlnet_aux import OpenposeDetector
 )
 def full_pipeline(
     output_dir: str,
-    CLEARML_DATASET_ID: str = "83697f8f15c2423fb3b961bfc130dac1"
+    CLEARML_DATASET_ID: str = "936ce7ce676a41eca85cecfc59f1d6db"
 ):
     """
     Full AR Try-On pipeline:
