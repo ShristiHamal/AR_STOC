@@ -25,6 +25,7 @@ mediapipe = "*"
 clearml = "*"
 clearml-agent = "*"
 streamlit = "*"
+altair = "<5"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.0.0"
