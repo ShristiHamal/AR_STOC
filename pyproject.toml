@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "ar-stoc"
+version = "0.1.0"
+description = "AI-Powered Augmented Reality (AR) Virtual Try-On System using Stable Diffusion, ControlNet, and ClearML Pipelines"
+authors = ["Shristi Hamal <shristi.hamal@student.uts.edu.au>"]
+license = "MIT"
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.9.13,<3.10"
+
+# Core AI / ML
+torch = "*"
+torchvision = "*"
+diffusers = "*"
+transformers = "*"
+accelerate = "*"
+safetensors = "*"
+
+# ControlNet and image processing
+opencv-python = "*"
+pillow = "*"
+numpy = "*"
+pandas = "*"
+
+# Experiment tracking
+clearml = "*"
+
+# Web app / interface
+streamlit = "*"
+
+# Misc utilities
+tqdm = "*"
+altair = "4.2.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

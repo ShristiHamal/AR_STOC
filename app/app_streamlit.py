@@ -4,6 +4,9 @@ from PIL import Image
 import tempfile
 from app.controlnet_inference import run_controlnet_inference
 
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 st.set_page_config(page_title="AR Smart Try-On", layout="wide")
 st.title("AR Smart Try-On")
 
