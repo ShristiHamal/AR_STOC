@@ -4,7 +4,7 @@
 import streamlit as st
 from PIL import Image
 import tempfile
-from app.controlnet_inference import run_controlnet_inference
+from controlnet_inference import run_controlnet_inference
 
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
