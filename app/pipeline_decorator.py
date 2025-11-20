@@ -40,7 +40,10 @@ def full_pipeline(
     metrics = Evaluation(outputs_dir)
 
     logger.report_text("Pipeline Finished Successfully.")
+    logger.report_text(f"Device detected: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+
     return metrics
+
 
 
 #preprocessing component
@@ -94,9 +97,17 @@ def TryOnInference(csv_path: str, output_dir: str):
     task = Task.current_task()
     logger = task.get_logger()
 
-    df = pd.read_csv(csv_path)
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        logger.report_text(f"CSV read error: {e}")
+        raise
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    
+    task.upload_artifact(name=f"tryon_{idx:05d}", artifact_object=str(out_path))
+
 
     logger.report_text(f"Generating try-on images for {len(df)} samples...")
 

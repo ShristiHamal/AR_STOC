@@ -6,15 +6,14 @@ import os
 # Import your real try-on model
 from app.controlnet_inference import run_controlnet_inference
 
-#run UI with streamlit
+#Create Streamlit UI
 st.set_page_config(page_title="AR Virtual Try-On", layout="wide")
-st.title(" AR Virtual Try-On System")
+st.title("AR Virtual Try-On System")
 
 st.markdown("""
 Upload a **person image**, **clothing image**, **clothing mask**, and **OpenPose JSON**
 to generate a high-quality AI-powered virtual try-on result.
 """)
-
 
 
 prompt = st.text_input(
@@ -52,28 +51,44 @@ uploaded_pose_json = st.sidebar.file_uploader(
     type=["json"]
 )
 
+if uploaded_person:
+    st.sidebar.image(uploaded_person, caption="Person Preview", use_column_width=True)
+
+if uploaded_cloth:
+    st.sidebar.image(uploaded_cloth, caption="Clothing Preview", use_column_width=True)
+
+if uploaded_mask:
+    st.sidebar.image(uploaded_mask, caption="Mask Preview", use_column_width=True)
 
 
+
+# Try-On Execution
 if st.button("Run Virtual Try-On"):
-    # Validate inputs
+
     if not (uploaded_person and uploaded_cloth and uploaded_mask and uploaded_pose_json):
         st.error("Please upload ALL required files: Person, Cloth, Mask, and Pose JSON.")
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Save all uploaded files into temp directory
             person_path = os.path.join(tmpdir, "person.png")
             cloth_path = os.path.join(tmpdir, "cloth.png")
             mask_path = os.path.join(tmpdir, "mask.png")
             pose_json_path = os.path.join(tmpdir, "pose.json")
 
+            # Save person + cloth
             Image.open(uploaded_person).convert("RGB").save(person_path)
             Image.open(uploaded_cloth).convert("RGB").save(cloth_path)
-            Image.open(uploaded_mask).convert("L").save(mask_path)
+
+            # Save mask as binary mask
+            mask_img = Image.open(uploaded_mask).convert("L")
+            mask_bin = mask_img.point(lambda x: 255 if x > 128 else 0, mode="1")
+            mask_bin = mask_bin.convert("L")
+            mask_bin.save(mask_path)
 
             # Save JSON
             with open(pose_json_path, "wb") as f:
                 f.write(uploaded_pose_json.read())
 
+            # Run inference
             with st.spinner("Running Virtual Try-On..."):
                 try:
                     output_img = run_controlnet_inference(
