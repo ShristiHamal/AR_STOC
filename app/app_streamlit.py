@@ -1,38 +1,92 @@
-
-
-# app/app_streamlit.py
 import streamlit as st
 from PIL import Image
 import tempfile
-from controlnet_inference import run_controlnet_inference
+import os
 
-import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Import your real try-on model
+from app.controlnet_inference import run_controlnet_inference
 
-st.set_page_config(page_title="AR Smart Try-On", layout="wide")
-st.title("AR Smart Try-On")
+#run UI with streamlit
+st.set_page_config(page_title="AR Virtual Try-On", layout="wide")
+st.title(" AR Virtual Try-On System")
 
-mode = st.radio("Input mode:", ["Upload Image"])
-prompt = st.text_input("Prompt", value="Person wearing clothing with photorealistic style")
-steps = st.slider("Inference steps", 1, 50, 8)
+st.markdown("""
+Upload a **person image**, **clothing image**, **clothing mask**, and **OpenPose JSON**
+to generate a high-quality AI-powered virtual try-on result.
+""")
 
-st.sidebar.header("Select Clothing")
-uploaded_cloth = st.sidebar.file_uploader("Upload clothing image", type=["png","jpg","jpeg"])
-uploaded_person = st.file_uploader("Upload person image", type=["png","jpg","jpeg"])
 
-if st.button("Run Try-On"):
-    if not uploaded_person or not uploaded_cloth:
-        st.error("Upload both person and clothing images.")
+
+prompt = st.text_input(
+    "Prompt:",
+    value="A person wearing the given clothing, photorealistic."
+)
+
+steps = st.slider(
+    "Inference steps:",
+    min_value=5,
+    max_value=75,
+    value=20,
+)
+
+
+st.sidebar.header("Upload Inputs")
+
+uploaded_person = st.sidebar.file_uploader(
+    "Person Image:",
+    type=["jpg", "jpeg", "png"]
+)
+
+uploaded_cloth = st.sidebar.file_uploader(
+    "Clothing Image:",
+    type=["jpg", "jpeg", "png"]
+)
+
+uploaded_mask = st.sidebar.file_uploader(
+    "Clothing Mask Image:",
+    type=["png", "jpg"]
+)
+
+uploaded_pose_json = st.sidebar.file_uploader(
+    "Pose JSON File:",
+    type=["json"]
+)
+
+
+
+if st.button("Run Virtual Try-On"):
+    # Validate inputs
+    if not (uploaded_person and uploaded_cloth and uploaded_mask and uploaded_pose_json):
+        st.error("Please upload ALL required files: Person, Cloth, Mask, and Pose JSON.")
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
-            person_path = f"{tmpdir}/person.png"
-            cloth_path = f"{tmpdir}/cloth.png"
+            # Save all uploaded files into temp directory
+            person_path = os.path.join(tmpdir, "person.png")
+            cloth_path = os.path.join(tmpdir, "cloth.png")
+            mask_path = os.path.join(tmpdir, "mask.png")
+            pose_json_path = os.path.join(tmpdir, "pose.json")
+
             Image.open(uploaded_person).convert("RGB").save(person_path)
             Image.open(uploaded_cloth).convert("RGB").save(cloth_path)
+            Image.open(uploaded_mask).convert("L").save(mask_path)
 
-            with st.spinner("Running inference..."):
+            # Save JSON
+            with open(pose_json_path, "wb") as f:
+                f.write(uploaded_pose_json.read())
+
+            with st.spinner("Running Virtual Try-On..."):
                 try:
-                    out_im = run_controlnet_inference(person_path, cloth_path, prompt=prompt, num_inference_steps=steps)
-                    st.image(out_im, caption="Try-On Result", use_column_width=True)
+                    output_img = run_controlnet_inference(
+                        person_img_path=person_path,
+                        cloth_img_path=cloth_path,
+                        mask_img_path=mask_path,
+                        pose_json_path=pose_json_path,
+                        prompt=prompt,
+                        num_inference_steps=steps,
+                        strength=0.65
+                    )
+
+                    st.image(output_img, caption="Virtual Try-On Result", use_column_width=True)
+
                 except Exception as e:
-                    st.error(f"Inference failed: {e}")
+                    st.error(f" Inference failed: {e}")
