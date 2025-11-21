@@ -1,6 +1,5 @@
 # app/pipeline_decorator.py
 
-import os
 from pathlib import Path
 import pandas as pd
 from PIL import Image
@@ -10,34 +9,33 @@ import torch
 from clearml import Task, Dataset
 from clearml import PipelineDecorator
 
-# Import the inpainting-based try-on function
-# Make sure you have app/inpaint_inference.py with run_inpaint_tryon defined
 from app.inpaint_inference import run_inpaint_tryon
 
 
+
 # ------------------------------------------------------------
-# Full ClearML Pipeline
+# Full ClearML Pipeline (Decorator-based)
 # ------------------------------------------------------------
 @PipelineDecorator.pipeline(
     name="AR_TryOn_Inpaint_Batch",
     project="AR_STOC",
     version="1.0.0",
-    default_queue="ar_stoc",
-    pipeline_execution_queue="ar_stoc",
+    default_queue="ar_stoc",            # components will run on this queue
+    pipeline_execution_queue="ar_stoc", # controller also on this queue (or leave None)
 )
 def full_pipeline(
     CLEARML_DATASET_ID: str = "936ce7ce676a41eca85cecfc59f1d6db",
-    train_pairs_relpath: str = "train/train_pairs.txt",  # fallbacks are handled inside
+    train_pairs_relpath: str = "train_pairs.txt",  # relative path inside dataset
     person_dir_hint: str = "train/image",
     cloth_dir_hint: str = "train/cloth",
-    sample_ratio: float = 0.02,  # 2% subset for quick runs; set 1.0 for full dataset
+    sample_ratio: float = 0.02,                    # 2% subset by default
     output_dir: str = "./pipeline_inpaint_outputs",
 ):
     """
     Main ClearML pipeline:
-    1) Preprocessing: load and sample train_pairs.txt
-    2) TryOnInference: batch inpainting try-on using Stable Diffusion
-    3) Evaluation: simple metrics over generated images
+      1) Preprocessing: load + sample train_pairs
+      2) TryOnInference: batch inpainting try-on
+      3) Evaluation: simple image stats
     """
     task = Task.current_task()
     logger = task.get_logger()
@@ -115,9 +113,6 @@ def Preprocessing(
     dataset_root = Path(dataset.get_local_copy())
 
     # Try several possible locations for train_pairs
-    # 1) user-provided relpath
-    # 2) root-level train_pairs.txt
-    # 3) train/train_pairs.txt
     possible_paths = [
         dataset_root / train_pairs_relpath,
         dataset_root / "train_pairs.txt",
@@ -199,7 +194,6 @@ def TryOnInference(
     task = Task.current_task()
     logger = task.get_logger()
 
-    # Load pairs CSV
     try:
         df = pd.read_csv(csv_path)
     except Exception as e:
@@ -257,7 +251,6 @@ def TryOnInference(
             person_img = Image.open(person_file).convert("RGB")
             cloth_img = Image.open(cloth_file).convert("RGB")
 
-            # Call inpainting-based try-on
             result = run_inpaint_tryon(
                 person_image=person_img,
                 cloth_image=cloth_img,
@@ -269,7 +262,6 @@ def TryOnInference(
             out_path = output_path / f"tryon_{idx:05d}.png"
             result.save(out_path)
 
-            # Log to ClearML
             logger.report_image(
                 title=f"Try-On Result {idx}",
                 series="inpaint_generated",
@@ -338,17 +330,3 @@ def Evaluation(output_dir: str):
     logger.report_text(f"Evaluated {len(metrics)} try-on images.")
 
     return {"metrics": metrics}
-
-
-# ------------------------------------------------------------
-# Local entry point
-# ------------------------------------------------------------
-if __name__ == "__main__":
-    full_pipeline(
-        CLEARML_DATASET_ID="936ce7ce676a41eca85cecfc59f1d6db",
-        train_pairs_relpath="train_pairs.txt",  # adjust if yours is under train/
-        person_dir_hint="train/image",
-        cloth_dir_hint="train/cloth",
-        sample_ratio=0.02,
-        output_dir="./pipeline_inpaint_outputs",
-    )
