@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import pandas as pd
-from .utils import read_img, load_openpose_json
+
 
 class VITONDataset(Dataset):
     def __init__(self, csv_file, transform=None):

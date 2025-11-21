@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import json
 import cv2
 from PIL import Image
 from diffusers import (
@@ -10,11 +9,16 @@ from diffusers import (
 )
 from controlnet_aux import OpenposeDetector
 
+# ------------------------------------------------------------
+# Device / dtype setup
+# ------------------------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.float16 if device == "cuda" else torch.float32
 
 
-# Load ControlNet model and Stable Diffusion pipeline
+# ------------------------------------------------------------
+# Load ControlNet + Stable Diffusion pipeline
+# ------------------------------------------------------------
 pose_controlnet = ControlNetModel.from_pretrained(
     "lllyasviel/sd-controlnet-openpose",
     torch_dtype=dtype
@@ -22,108 +26,88 @@ pose_controlnet = ControlNetModel.from_pretrained(
 
 pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
     "runwayml/stable-diffusion-v1-5",
-    controlnet=[pose_controlnet],
-    torch_dtype=dtype
+    controlnet=pose_controlnet,
+    dtype=dtype
 ).to(device)
 
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
-pipe.safety_checker = lambda images, **kwargs: (images, False)
 
+# FIX: Correct safety checker to avoid `'bool' is not iterable`
+def dummy_safety_checker(images, **kwargs):
+    return images, [False] * len(images)
+
+pipe.safety_checker = dummy_safety_checker
+
+# Load OpenPose for auto pose extraction
 pose_detector = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
 
-#Convert OpenPose JSON to pose map
-def pose_json_to_map(json_path, width, height):
-    """Convert OpenPose JSON keypoints into ControlNet pose map."""
-    with open(json_path, "r") as f:
-        data = json.load(f)
-
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
-
-    if "people" not in data or len(data["people"]) == 0:
-        return Image.fromarray(canvas)
-
-    pts = data["people"][0].get("pose_keypoints_2d", [])
-
-    for i in range(0, len(pts), 3):
-        x, y, conf = pts[i:i + 3]
-        if x > 0 and y > 0:
-            cv2.circle(canvas, (int(x), int(y)), 4, (255, 255, 255), -1)
-
-    return Image.fromarray(canvas)
-
-
-# Clothes wrapping based on torso size
-def tps_warp_cloth(cloth, mask, target_h, target_w):
-    """Resizes cloth roughly to body width using mask."""
-    cloth = cloth.convert("RGBA")
-    mask = mask.resize(cloth.size, Image.NEAREST)
-
-    cloth_np = np.array(cloth)
-    mask_np = np.array(mask)
-
-    # Apply mask to cloth
-    garment = cv2.bitwise_and(cloth_np, cloth_np, mask=mask_np)
-
-    # Resize garment to 45% of torso width (tunable)
-    new_w = int(target_w * 0.45)
-    new_h = int(target_h * 0.45)
-
-    if new_w <= 0 or new_h <= 0:
-        return garment
-
-    garment_resized = cv2.resize(garment, (new_w, new_h))
-
-    return garment_resized
-
-
-#Virtual Try-On Inference Function
+# ------------------------------------------------------------
+# Virtual Try-On Inference Function
+# ------------------------------------------------------------
 def run_controlnet_inference(
-    person_img_path,
-    cloth_img_path,
-    mask_img_path,
-    pose_json_path,
-    prompt="A person wearing the given clothing, photorealistic",
+    person_image,
+    cloth_image,
     num_inference_steps=20,
-    strength=0.65
+    strength=0.65,
+    prompt="A person wearing the given clothing, photorealistic",
 ):
-#Load images
-    person = Image.open(person_img_path).convert("RGB")
-    cloth = Image.open(cloth_img_path).convert("RGB")
-    mask = Image.open(mask_img_path).convert("L")
+    """
+    Inputs:
+        person_image: PIL Image (RGB)
+        cloth_image: PIL Image (RGB)
+    Output:
+        PIL Image result from Stable Diffusion + ControlNet refinement
+    """
 
-    W, H = person.size
+    # Normalize both images to RGB
+    person_image = person_image.convert("RGB")
+    cloth_image = cloth_image.convert("RGB")
 
-#Generate pose map from JSON
-    pose_map = pose_json_to_map(pose_json_path, W, H)
+    W, H = person_image.size
 
-    # ---------------------------
-    # 3. Warp cloth
-    # ---------------------------
-    warped = tps_warp_cloth(cloth, mask, H, W)
-    h, w = warped.shape[:2]
+    # --------------------------------------------------------
+    # Step 1 — AUTO-GENERATE POSE MAP
+    # --------------------------------------------------------
+    pose_map = pose_detector(person_image)
+    pose_map = pose_map.convert("RGB").resize((W, H), Image.BICUBIC)
 
-# Create coarse composite
-    coarse = np.array(person.copy())
+    # --------------------------------------------------------
+    # Step 2 — Resize clothing to upper torso size
+    # --------------------------------------------------------
+    new_w = int(W * 0.45)
+    new_h = int(H * 0.45)
+    cloth_resized = cloth_image.resize((new_w, new_h), Image.BICUBIC)
 
-    # Position the garment
-    x = W // 2 - w // 2     # place in horizontal center
-    y = int(H * 0.32)       # place roughly on upper torso
+    # Convert to numpy arrays
+    cloth_np = np.array(cloth_resized)
+    person_np = np.array(person_image.copy())
 
-    # Safe bounds
-    if y + h <= H and x + w <= W and x >= 0 and y >= 0:
-        coarse[y:y+h, x:x+w] = warped
+    # --------------------------------------------------------
+    # Step 3 — Paste clothing onto torso to create coarse image
+    # --------------------------------------------------------
+    x = W // 2 - new_w // 2     # center horizontally
+    y = int(H * 0.32)           # place on upper torso
 
-    coarse_img = Image.fromarray(coarse)
+    # Ensure safe placement
+    if 0 <= x < W and 0 <= y < H and (y + new_h) <= H and (x + new_w) <= W:
+        person_np[y:y + new_h, x:x + new_w] = cloth_np
 
-#Stable Diffusion Inference
-    with torch.autocast(device_type=device, dtype=dtype):
+    coarse_img = Image.fromarray(person_np)
+
+    # Ensure coarse image is exactly same size as pose map
+    coarse_img = coarse_img.resize((W, H), Image.BICUBIC)
+
+    # --------------------------------------------------------
+    # Step 4 — Run Stable Diffusion with ControlNet refinement
+    # --------------------------------------------------------
+    with torch.autocast(device_type=device, dtype=dtype if device == "cuda" else torch.float32):
         result = pipe(
             prompt=prompt,
             image=coarse_img,
             control_image=pose_map,
             num_inference_steps=num_inference_steps,
-            strength=strength
+            strength=strength,
         ).images[0]
 
     return result

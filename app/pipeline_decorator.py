@@ -5,18 +5,21 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 import numpy as np
+import torch
 
 from clearml import Task, Dataset
 from clearml import PipelineDecorator
 
-# Import your real virtual try-on function
-from app.controlnet_inference import run_controlnet_inference
+# Import the inpainting-based try-on function
+# Make sure you have app/inpaint_inference.py with run_inpaint_tryon defined
+from app.inpaint_inference import run_inpaint_tryon
 
 
-# define full pipeline
-
+# ------------------------------------------------------------
+# Full ClearML Pipeline
+# ------------------------------------------------------------
 @PipelineDecorator.pipeline(
-    name="AR_TryOn_VirtualTryOn_Full",
+    name="AR_TryOn_Inpaint_Batch",
     project="AR_STOC",
     version="1.0.0",
     default_queue="ar_stoc",
@@ -24,128 +27,274 @@ from app.controlnet_inference import run_controlnet_inference
 )
 def full_pipeline(
     CLEARML_DATASET_ID: str = "936ce7ce676a41eca85cecfc59f1d6db",
-    output_dir: str = "./pipeline_tryon_outputs",
+    train_pairs_relpath: str = "train/train_pairs.txt",  # fallbacks are handled inside
+    person_dir_hint: str = "train/image",
+    cloth_dir_hint: str = "train/cloth",
+    sample_ratio: float = 0.02,  # 2% subset for quick runs; set 1.0 for full dataset
+    output_dir: str = "./pipeline_inpaint_outputs",
 ):
+    """
+    Main ClearML pipeline:
+    1) Preprocessing: load and sample train_pairs.txt
+    2) TryOnInference: batch inpainting try-on using Stable Diffusion
+    3) Evaluation: simple metrics over generated images
+    """
     task = Task.current_task()
     logger = task.get_logger()
-    logger.report_text("Starting Virtual Try-On Pipeline...")
+    logger.report_text("Starting Inpainting-based Virtual Try-On Pipeline...")
 
     # Step 1 — Preprocessing
-    csv_path = Preprocessing(CLEARML_DATASET_ID)
+    csv_path, dataset_root = Preprocessing(
+        CLEARML_DATASET_ID,
+        train_pairs_relpath,
+        sample_ratio,
+    )
 
-    # Step 2 — Try-On Inference
-    outputs_dir = TryOnInference(csv_path, output_dir)
+    # Step 2 — Batch Try-On Inference
+    outputs_dir = TryOnInference(
+        csv_path=csv_path,
+        dataset_root=dataset_root,
+        person_dir_hint=person_dir_hint,
+        cloth_dir_hint=cloth_dir_hint,
+        output_dir=output_dir,
+    )
 
     # Step 3 — Evaluation
     metrics = Evaluation(outputs_dir)
 
-    logger.report_text("Pipeline Finished Successfully.")
-    logger.report_text(f"Device detected: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+    device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+    logger.report_text(f"Pipeline Finished Successfully. Device: {device_name}")
 
     return metrics
 
 
+# ------------------------------------------------------------
+# Helper: resolve directories robustly
+# ------------------------------------------------------------
+def _resolve_subdir(root: Path, hint: str, fallback_rel_paths):
+    """
+    Try to resolve a subdirectory inside 'root' where images live.
+    We first look at 'hint', then fall back to common patterns.
+    """
+    candidates = [hint] + list(fallback_rel_paths)
+    for rel in candidates:
+        cand = root / rel
+        if cand.exists() and cand.is_dir():
+            return cand
+    raise FileNotFoundError(
+        f"Could not find a valid directory under {root} "
+        f"using hint '{hint}' or fallbacks {fallback_rel_paths}"
+    )
 
-#preprocessing component
 
+# ------------------------------------------------------------
+# Preprocessing Component
+# ------------------------------------------------------------
 @PipelineDecorator.component(
     name="Preprocessing",
     task_type=Task.TaskTypes.data_processing,
-    return_values=["csv_out"],
+    return_values=["csv_out", "dataset_root"],
     cache=False,
 )
-def Preprocessing(CLEARML_DATASET_ID: str):
+def Preprocessing(
+    CLEARML_DATASET_ID: str,
+    train_pairs_relpath: str,
+    sample_ratio: float,
+):
+    """
+    Fetch ClearML dataset, load train_pairs file, and optionally sample a subset.
+    Returns:
+      - csv_out: path to a CSV (person_id, cloth_id)
+      - dataset_root: local path to dataset root
+    """
     task = Task.current_task()
     logger = task.get_logger()
 
     logger.report_text(f"Fetching dataset {CLEARML_DATASET_ID} from ClearML...")
-
     dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
-    dataset_path = Path(dataset.get_local_copy())
+    dataset_root = Path(dataset.get_local_copy())
 
-    train_pairs = dataset_path / "train" / "train_pairs.csv"
-    if not train_pairs.exists():
-        raise FileNotFoundError(f"CSV not found: {train_pairs}")
+    # Try several possible locations for train_pairs
+    # 1) user-provided relpath
+    # 2) root-level train_pairs.txt
+    # 3) train/train_pairs.txt
+    possible_paths = [
+        dataset_root / train_pairs_relpath,
+        dataset_root / "train_pairs.txt",
+        dataset_root / "train" / "train_pairs.txt",
+    ]
 
-    df = pd.read_csv(train_pairs)
+    train_pairs_path = None
+    for p in possible_paths:
+        if p.exists():
+            train_pairs_path = p
+            break
 
-    # Only take a small subset for testing (2%)
-    sample_size = max(1, int(len(df) * 0.02))
-    df = df.sample(n=sample_size, random_state=42)
+    if train_pairs_path is None:
+        raise FileNotFoundError(
+            f"Could not find train_pairs file in dataset. Tried: "
+            + ", ".join(str(p) for p in possible_paths)
+        )
 
-    resolved_csv = dataset_path / "train" / "train_pairs_resolved.csv"
-    df.to_csv(resolved_csv, index=False)
+    logger.report_text(f"Using train_pairs file at: {train_pairs_path}")
 
+    # train_pairs.txt is space-separated with two columns: person_id, cloth_id
+    df = pd.read_csv(
+        train_pairs_path,
+        delim_whitespace=True,
+        header=None,
+        names=["person_id", "cloth_id"],
+    )
+
+    total = len(df)
+    logger.report_text(f"Total pairs found: {total}")
+
+    if 0 < sample_ratio < 1.0:
+        sample_size = max(1, int(total * sample_ratio))
+        df_sample = df.sample(n=sample_size, random_state=42)
+        logger.report_text(f"Sampling {sample_size} pairs ({sample_ratio*100:.1f}% of data).")
+    else:
+        df_sample = df
+        logger.report_text("Using full dataset (no sampling).")
+
+    # Save sampled/resolved CSV next to train_pairs
+    csv_out = train_pairs_path.parent / "train_pairs_resolved.csv"
+    df_sample.to_csv(csv_out, index=False)
+
+    # Log preview table
     logger.report_table(
         title="Sampled Train Pairs",
         series="pairs_preview",
-        table_plot=df.head(10),
+        table_plot=df_sample.head(10),
     )
-    logger.report_text(f"Preprocessing complete. {sample_size} items saved to CSV.")
 
-    return str(resolved_csv)
+    logger.report_text(f"Preprocessing complete. CSV written to: {csv_out}")
+
+    return str(csv_out), str(dataset_root)
 
 
-#try-on image generation
+# ------------------------------------------------------------
+# Try-On Inference Component
+# ------------------------------------------------------------
 @PipelineDecorator.component(
-    name="TryOnInference",
+    name="TryOnInference_Inpaint",
     task_type=Task.TaskTypes.inference,
     return_values=["output_dir"],
     cache=False,
 )
-def TryOnInference(csv_path: str, output_dir: str):
+def TryOnInference(
+    csv_path: str,
+    dataset_root: str,
+    person_dir_hint: str,
+    cloth_dir_hint: str,
+    output_dir: str,
+):
+    """
+    Batch inpainting try-on:
+      - Reads sampled train_pairs_resolved.csv
+      - Resolves person + cloth paths inside ClearML dataset
+      - Calls run_inpaint_tryon(...) for each pair
+      - Saves outputs and logs images
+    """
     task = Task.current_task()
     logger = task.get_logger()
 
+    # Load pairs CSV
     try:
         df = pd.read_csv(csv_path)
     except Exception as e:
         logger.report_text(f"CSV read error: {e}")
         raise
 
+    dataset_root_path = Path(dataset_root)
+
+    # Resolve image directories robustly
+    person_dir = _resolve_subdir(
+        dataset_root_path,
+        person_dir_hint,
+        fallback_rel_paths=[
+            "train/image",
+            "image",
+            "person",
+            "train/person",
+        ],
+    )
+
+    cloth_dir = _resolve_subdir(
+        dataset_root_path,
+        cloth_dir_hint,
+        fallback_rel_paths=[
+            "train/cloth",
+            "cloth",
+            "clothes",
+        ],
+    )
+
+    logger.report_text(f"Person images directory: {person_dir}")
+    logger.report_text(f"Cloth images directory: {cloth_dir}")
+
+    # Prepare output dir
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    task.upload_artifact(name=f"tryon_{idx:05d}", artifact_object=str(out_path))
 
-
-    logger.report_text(f"Generating try-on images for {len(df)} samples...")
+    logger.report_text(f"Generating inpainting try-on images for {len(df)} samples...")
 
     for idx, row in df.iterrows():
+        person_id = str(row["person_id"]).strip()
+        cloth_id = str(row["cloth_id"]).strip()
 
-        person = row["person_image"]
-        cloth = row["cloth_image"]
-        mask = row["mask_image"]
-        pose = row["pose_json"]
+        person_file = person_dir / person_id
+        cloth_file = cloth_dir / cloth_id
+
+        if not person_file.exists():
+            logger.report_text(f"[WARN] Person image missing: {person_file}")
+            continue
+        if not cloth_file.exists():
+            logger.report_text(f"[WARN] Cloth image missing: {cloth_file}")
+            continue
 
         try:
-            result = run_controlnet_inference(
-                person_img_path=person,
-                cloth_img_path=cloth,
-                mask_img_path=mask,
-                pose_json_path=pose,
-                num_inference_steps=20,
-                strength=0.65,
+            person_img = Image.open(person_file).convert("RGB")
+            cloth_img = Image.open(cloth_file).convert("RGB")
+
+            # Call inpainting-based try-on
+            result = run_inpaint_tryon(
+                person_image=person_img,
+                cloth_image=cloth_img,
+                num_inference_steps=25,
+                guidance_scale=7.5,
+                prompt="a realistic photo of the person wearing the uploaded cloth",
             )
 
             out_path = output_path / f"tryon_{idx:05d}.png"
             result.save(out_path)
 
+            # Log to ClearML
             logger.report_image(
                 title=f"Try-On Result {idx}",
-                series="generated",
-                local_path=str(out_path)
+                series="inpaint_generated",
+                local_path=str(out_path),
             )
 
         except Exception as e:
-            logger.report_text(f"[ERROR] Failed for pair {idx}: {e}")
+            logger.report_text(f"[ERROR] Failed for pair {idx} ({person_id}, {cloth_id}): {e}")
+
+    # Upload the whole output directory as an artifact
+    try:
+        task.upload_artifact(
+            name="inpaint_tryon_outputs_dir",
+            artifact_object=str(output_path),
+        )
+    except Exception as e:
+        logger.report_text(f"[WARN] Could not upload output_dir as artifact: {e}")
 
     logger.report_text(f"Try-on generation completed. Output saved to: {output_path}")
     return str(output_path)
 
 
-#evaluation component
-
+# ------------------------------------------------------------
+# Evaluation Component
+# ------------------------------------------------------------
 @PipelineDecorator.component(
     name="Evaluation",
     task_type=Task.TaskTypes.testing,
@@ -153,6 +302,11 @@ def TryOnInference(csv_path: str, output_dir: str):
     cache=False,
 )
 def Evaluation(output_dir: str):
+    """
+    Simple evaluation over generated images:
+      - mean pixel value
+      - std pixel value
+    """
     task = Task.current_task()
     logger = task.get_logger()
 
@@ -165,11 +319,13 @@ def Evaluation(output_dir: str):
     metrics = []
     for path in image_files:
         img = np.array(Image.open(path).convert("RGB"))
-        metrics.append({
-            "image": path.name,
-            "mean_pixel": float(img.mean()),
-            "std_pixel": float(img.std()),
-        })
+        metrics.append(
+            {
+                "image": path.name,
+                "mean_pixel": float(img.mean()),
+                "std_pixel": float(img.std()),
+            }
+        )
 
     df_eval = pd.DataFrame(metrics)
 
@@ -184,5 +340,15 @@ def Evaluation(output_dir: str):
     return {"metrics": metrics}
 
 
+# ------------------------------------------------------------
+# Local entry point
+# ------------------------------------------------------------
 if __name__ == "__main__":
-    full_pipeline(output_dir="./pipeline_tryon_outputs")
+    full_pipeline(
+        CLEARML_DATASET_ID="936ce7ce676a41eca85cecfc59f1d6db",
+        train_pairs_relpath="train_pairs.txt",  # adjust if yours is under train/
+        person_dir_hint="train/image",
+        cloth_dir_hint="train/cloth",
+        sample_ratio=0.02,
+        output_dir="./pipeline_inpaint_outputs",
+    )

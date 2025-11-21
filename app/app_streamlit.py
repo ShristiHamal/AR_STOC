@@ -1,107 +1,158 @@
 import streamlit as st
 from PIL import Image
-import tempfile
-import os
-
-# Import your real try-on model
-from app.controlnet_inference import run_controlnet_inference
-
-#Create Streamlit UI
-st.set_page_config(page_title="AR Virtual Try-On", layout="wide")
-st.title("AR Virtual Try-On System")
-
-st.markdown("""
-Upload a **person image**, **clothing image**, **clothing mask**, and **OpenPose JSON**
-to generate a high-quality AI-powered virtual try-on result.
-""")
+from inpaint_inference import run_inpaint_tryon
 
 
-prompt = st.text_input(
-    "Prompt:",
-    value="A person wearing the given clothing, photorealistic."
+# ------------------------------------------------------------
+# Streamlit Page Config
+# ------------------------------------------------------------
+st.set_page_config(
+    page_title="AR Virtual Try-On  Interactive Wardrobe",
+    layout="wide",
 )
 
-steps = st.slider(
-    "Inference steps:",
-    min_value=5,
-    max_value=75,
-    value=20,
+st.title(" AR Virtual Try-On  Interactive Wardrobe")
+
+
+# ------------------------------------------------------------
+# Sidebar – Person Image (Upload or Webcam)
+# ------------------------------------------------------------
+st.sidebar.header("1. Person Photo")
+
+person_source = st.sidebar.radio(
+    "Choose source",
+    ["Upload image", "Use webcam"],
 )
 
+person_image = None
 
-st.sidebar.header("Upload Inputs")
+if person_source == "Upload image":
+    person_file = st.sidebar.file_uploader(
+        "Upload a person image",
+        type=["jpg", "jpeg", "png"],
+        key="person_uploader",
+    )
+    if person_file:
+        person_image = Image.open(person_file).convert("RGB")
 
-uploaded_person = st.sidebar.file_uploader(
-    "Person Image:",
-    type=["jpg", "jpeg", "png"]
-)
+else:
+    cam_img = st.sidebar.camera_input("Take a photo", key="camera_input")
+    if cam_img:
+        person_image = Image.open(cam_img).convert("RGB")
 
-uploaded_cloth = st.sidebar.file_uploader(
-    "Clothing Image:",
-    type=["jpg", "jpeg", "png"]
-)
-
-uploaded_mask = st.sidebar.file_uploader(
-    "Clothing Mask Image:",
-    type=["png", "jpg"]
-)
-
-uploaded_pose_json = st.sidebar.file_uploader(
-    "Pose JSON File:",
-    type=["json"]
-)
-
-if uploaded_person:
-    st.sidebar.image(uploaded_person, caption="Person Preview", use_column_width=True)
-
-if uploaded_cloth:
-    st.sidebar.image(uploaded_cloth, caption="Clothing Preview", use_column_width=True)
-
-if uploaded_mask:
-    st.sidebar.image(uploaded_mask, caption="Mask Preview", use_column_width=True)
+if person_image:
+    st.sidebar.image(person_image, caption="Person Image", use_column_width=True)
+else:
+    st.sidebar.info("Please upload or take a person photo.")
 
 
+# ------------------------------------------------------------
+# Layout Columns
+# ------------------------------------------------------------
+col_clothes, col_controls, col_output = st.columns([1.2, 0.8, 1.4])
 
-# Try-On Execution
-if st.button("Run Virtual Try-On"):
 
-    if not (uploaded_person and uploaded_cloth and uploaded_mask and uploaded_pose_json):
-        st.error("Please upload ALL required files: Person, Cloth, Mask, and Pose JSON.")
+# ------------------------------------------------------------
+# Column 1 – Clothing Upload Panel
+# ------------------------------------------------------------
+with col_clothes:
+    st.subheader("2. Upload Clothing Images")
+    clothes_files = st.file_uploader(
+        "Upload multiple clothing images",
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=True,
+        key="clothes_uploader",
+    )
+
+    if not clothes_files:
+        st.info("Upload clothing items to build your wardrobe.")
+        selected_cloth_image = None
+        selected_cloth_name = None
     else:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            person_path = os.path.join(tmpdir, "person.png")
-            cloth_path = os.path.join(tmpdir, "cloth.png")
-            mask_path = os.path.join(tmpdir, "mask.png")
-            pose_json_path = os.path.join(tmpdir, "pose.json")
+        st.success(f"{len(clothes_files)} clothing items uploaded.")
 
-            # Save person + cloth
-            Image.open(uploaded_person).convert("RGB").save(person_path)
-            Image.open(uploaded_cloth).convert("RGB").save(cloth_path)
+        # Dropdown for selecting a clothing item
+        cloth_names = [f.name for f in clothes_files]
+        selected_cloth_name = st.selectbox(
+            "Select a clothing item to try on",
+            cloth_names,
+            key="cloth_selector",
+        )
 
-            # Save mask as binary mask
-            mask_img = Image.open(uploaded_mask).convert("L")
-            mask_bin = mask_img.point(lambda x: 255 if x > 128 else 0, mode="1")
-            mask_bin = mask_bin.convert("L")
-            mask_bin.save(mask_path)
+        # Find selected clothing file
+        selected_cloth_image = None
+        for f in clothes_files:
+            if f.name == selected_cloth_name:
+                selected_cloth_image = Image.open(f).convert("RGB")
+                break
 
-            # Save JSON
-            with open(pose_json_path, "wb") as f:
-                f.write(uploaded_pose_json.read())
+        if selected_cloth_image:
+            st.image(selected_cloth_image, caption="Selected Clothing")
 
-            # Run inference
-            with st.spinner("Running Virtual Try-On..."):
+
+# ------------------------------------------------------------
+# Clothing Gallery – MUST be outside columns (Streamlit rule)
+# ------------------------------------------------------------
+if clothes_files:
+    st.write("### Clothing Gallery")
+    gallery_cols = st.columns(3)
+
+    for idx, cloth_file in enumerate(clothes_files):
+        with gallery_cols[idx % 3]:
+            cloth_img = Image.open(cloth_file).convert("RGB")
+            st.image(cloth_img, caption=cloth_file.name)
+
+
+# ------------------------------------------------------------
+# Column 2 – Try-On Controls
+# ------------------------------------------------------------
+with col_controls:
+    st.subheader("3. Try-On Settings")
+
+    num_inference_steps = st.slider(
+        "Inference Steps",
+        min_value=10,
+        max_value=75,
+        value=25,
+        step=5,
+    )
+
+    prompt = st.text_area(
+        "Optional prompt",
+        value="A realistic virtual try-on.",
+    )
+
+    run_btn = st.button(" Run Virtual Try-On")
+
+
+# ------------------------------------------------------------
+# Column 3 – Output Section
+# ------------------------------------------------------------
+with col_output:
+    st.subheader("4. Virtual Try-On Result")
+
+    if run_btn:
+        # Validate inputs
+        if person_image is None:
+            st.error("Please upload a person image first.")
+        elif not clothes_files:
+            st.error("Please upload at least one clothing item.")
+        elif selected_cloth_image is None:
+            st.error("Please select a clothing item from the list.")
+        else:
+            with st.spinner("Generating virtual try-on result…"):
                 try:
-                    output_img = run_controlnet_inference(
-                        person_img_path=person_path,
-                        cloth_img_path=cloth_path,
-                        mask_img_path=mask_path,
-                        pose_json_path=pose_json_path,
-                        prompt=prompt,
-                        num_inference_steps=steps,
-                        strength=0.65
-                    )
+                    result = run_inpaint_tryon(
+                    person_image,
+                    selected_cloth_image,
+                    num_inference_steps=num_inference_steps,
+                    prompt=prompt,
+)
 
-                    st.image(output_img, caption="Virtual Try-On Result", use_column_width=True)
+                    st.image(result, caption=f"Result: {selected_cloth_name}")
 
                 except Exception as e:
                     st.error(f" Inference failed: {e}")
+
+    else:
+        st.info("Click **Run Virtual Try-On** to generate the result.")
