@@ -1,32 +1,30 @@
-torch==2.4.0
-torchvision==0.19.0
-torchaudio==2.4.0
-
-# Diffusers + ControlNet (compatible with Python 3.12)
-diffusers==0.26.3
-transformers==4.37.2
-huggingface_hub==0.25.2
-accelerate==0.27.2
-safetensors==0.4.2
-controlnet_aux==0.0.9
-
-# Utility + Vision
-opencv-python==4.10.0.84
-pillow==10.3.0
-numpy==1.26.4
-networkx==3.2.1
-
-# ClearML
 clearml==1.17.1
 
-# Streamlit + Web
-streamlit==1.32.2
-pyngrok==7.1.6
+# Stable Diffusers / ControlNet stack
+diffusers==0.26.3
+transformers==4.37.2
+accelerate==0.27.2
+safetensors
+huggingface_hub
 
-# Others
-requests==2.31.0
-tqdm==4.65.0
-python-dateutil==2.8.2
-pyyaml==6.0.1
-fsspec==2023.10.0
+controlnet_aux==0.0.9
+
+# Stable Torch versions that DO NOT trigger CUDA megawheels
+torch==2.0.1
+torchvision==0.15.2
+torchaudio==2.0.2
+
+# Vision / utilities
+opencv-python-headless
+pillow
+numpy==1.25.0
+networkx
+
+# ONLY if you need web UI (NOT for pipeline)
+# streamlit==1.24.0
+
+# General utilities
+tqdm
+requests
+pyyaml
 protobuf==3.20.3
