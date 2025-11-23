@@ -1,16 +1,14 @@
 # app/pipeline_decorator.py
 
-import json
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from PIL import Image
-import torch
 
 from clearml import Task, Dataset
 from clearml import PipelineDecorator
 
-# import your actual inpaint model
+# your actual inpaint model
 from app.inpaint_inference import run_inpaint_tryon
 
 
@@ -32,7 +30,7 @@ def full_pipeline(
 ):
     task = Task.current_task()
     logger = task.get_logger()
-    logger.report_text("🚀 Starting AR Inpaint Try-On Pipeline...")
+    logger.report_text("Starting AR Inpaint Try-On Pipeline...")
 
     csv_path, dataset_root = Preprocessing(
         CLEARML_DATASET_ID,
@@ -48,7 +46,7 @@ def full_pipeline(
 
     metrics = Evaluation(output_dir)
 
-    logger.report_text("🎉 Pipeline completed successfully.")
+    logger.report_text("Pipeline completed successfully.")
     return metrics
 
 
@@ -65,7 +63,7 @@ def Preprocessing(CLEARML_DATASET_ID: str, train_pairs_relpath: str, sample_rati
     task = Task.current_task()
     logger = task.get_logger()
 
-    logger.report_text(f"📁 Fetching dataset: {CLEARML_DATASET_ID}")
+    logger.report_text(f"Fetching dataset {CLEARML_DATASET_ID}")
     dataset = Dataset.get(dataset_id=CLEARML_DATASET_ID)
     dataset_root = Path(dataset.get_local_copy())
 
@@ -77,12 +75,10 @@ def Preprocessing(CLEARML_DATASET_ID: str, train_pairs_relpath: str, sample_rati
 
     if 0 < sample_ratio < 1:
         df = df.sample(int(len(df) * sample_ratio), random_state=42)
-        logger.report_text(f"📉 Sampling dataset to {len(df)} rows")
+        logger.report_text(f"Sampled to {len(df)} rows")
 
     resolved_csv = dataset_root / "train_pairs_resolved.csv"
     df.to_csv(resolved_csv, index=False)
-
-    logger.report_text(f"✅ Preprocessing done. Saved to: {resolved_csv}")
 
     return str(resolved_csv), str(dataset_root)
 
@@ -105,13 +101,11 @@ def TryOnInference(csv_path: str, dataset_root: str, output_dir: str):
 
     image_dir = dataset_root / "image"
     cloth_dir = dataset_root / "cloth"
-    mask_dir = dataset_root / "cloth-mask"
-    openpose_dir = dataset_root / "openpose_json"
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    logger.report_text(f"🖼 Starting inference for {len(df)} samples...")
+    logger.report_text(f"Running inference for {len(df)} pairs...")
 
     for idx, row in df.iterrows():
 
@@ -120,42 +114,28 @@ def TryOnInference(csv_path: str, dataset_root: str, output_dir: str):
 
         person_path = image_dir / pid
         cloth_path = cloth_dir / cid
-        mask_path = mask_dir / cid.replace(".jpg", ".png")
-        pose_path = openpose_dir / pid.replace(".jpg", "_keypoints.json")
 
         if not person_path.exists():
-            logger.report_text(f"[WARN] Missing person image: {person_path}")
+            logger.report_text(f"[WARN] Missing person: {person_path}")
             continue
         if not cloth_path.exists():
             logger.report_text(f"[WARN] Missing cloth: {cloth_path}")
-            continue
-        if not mask_path.exists():
-            logger.report_text(f"[WARN] Missing mask: {mask_path}")
-            continue
-        if not pose_path.exists():
-            logger.report_text(f"[WARN] Missing OpenPose JSON: {pose_path}")
             continue
 
         # Load
         person_img = Image.open(person_path).convert("RGB")
         cloth_img = Image.open(cloth_path).convert("RGB")
-        mask_img = Image.open(mask_path).convert("L")
-
-        with open(pose_path, "r") as f:
-            pose_json = json.load(f)
 
         try:
             result = run_inpaint_tryon(
                 person_image=person_img,
                 cloth_image=cloth_img,
-                mask_image=mask_img,
-                pose_json=pose_json,
             )
 
             out_path = output_path / f"tryon_{idx:05d}.png"
             result.save(out_path)
 
-            logger.report_image("Generated", f"TryOn-{idx}", str(out_path))
+            logger.report_image("TryOn Results", f"tryon-{idx}", str(out_path))
 
         except Exception as e:
             logger.report_text(f"[ERROR] Failed {pid}+{cid}: {e}")
@@ -178,7 +158,7 @@ def Evaluation(output_dir: str):
 
     imgs = list(Path(output_dir).glob("*.png"))
     if len(imgs) == 0:
-        logger.report_text("⚠ No images to evaluate.")
+        logger.report_text("No images to evaluate.")
         return {"metrics": []}
 
     stats = []
@@ -191,11 +171,6 @@ def Evaluation(output_dir: str):
         })
 
     df_stats = pd.DataFrame(stats)
-
-    logger.report_table(
-        title="Evaluation Summary",
-        series="pixel_stats",
-        table_plot=df_stats
-    )
+    logger.report_table("Evaluation Summary", "pixel_stats", df_stats)
 
     return {"metrics": stats}

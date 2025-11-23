@@ -94,7 +94,7 @@ def run_inpaint_tryon(
                 guidance_scale=guidance_scale,
             ).images[0]
     else:
-        # On CPU we skip autocast to avoid warnings
+        
         out = pipe(
             prompt=prompt,
             image=coarse_img,
