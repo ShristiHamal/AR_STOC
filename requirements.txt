@@ -10,9 +10,9 @@ huggingface_hub
 controlnet_aux==0.0.9
 
 # Stable Torch versions that DO NOT trigger CUDA megawheels
-torch==2.0.1
-torchvision==0.15.2
-torchaudio==2.0.2
+torch==2.2.0+cpu
+torchvision==0.17.0+cpu
+torchaudio==2.2.0+cpu
 
 # Vision / utilities
 opencv-python-headless
