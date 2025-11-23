@@ -2,19 +2,28 @@ import streamlit as st
 from PIL import Image
 
 # Correct import path
-from inpaint_inference import run_inpaint_tryon
+from app.inpaint_inference import run_inpaint_tryon
 
 
-st.set_page_config(page_title="AR Try-On", layout="wide")
-st.title(" AR Virtual Try-On ")
+# ---------------------------------------
+# PAGE CONFIG
+# ---------------------------------------
+st.set_page_config(
+    page_title="AR Virtual Try-On",
+    layout="wide"
+)
+
+st.title("AR Virtual Try-On System)")
 
 
-# -------------------------------
-# PERSON IMAGE
-# -------------------------------
+# ---------------------------------------
+# PERSON IMAGE UPLOAD
+# ---------------------------------------
+st.subheader("Upload Person Image")
+
 person_file = st.file_uploader(
-    "Upload Person Image (JPG/PNG)",
-    type=["jpg", "jpeg", "png"],
+    "Select a person image (JPG/PNG)",
+    type=["jpg", "jpeg", "png"]
 )
 
 if person_file:
@@ -24,12 +33,14 @@ else:
     person_img = None
 
 
-# -------------------------------
-# CLOTH IMAGE
-# -------------------------------
+# ---------------------------------------
+# CLOTH IMAGE UPLOAD
+# ---------------------------------------
+st.subheader("Upload Clothing Image")
+
 cloth_file = st.file_uploader(
-    "Upload Clothing Image (JPG/PNG)",
-    type=["jpg", "jpeg", "png"],
+    "Select a clothing image (JPG/PNG)",
+    type=["jpg", "jpeg", "png"]
 )
 
 if cloth_file:
@@ -39,44 +50,44 @@ else:
     cloth_img = None
 
 
-# -------------------------------
-# MASK IMAGE (REQUIRED)
-# -------------------------------
-mask_file = st.file_uploader(
-    "Upload Mask Image (PNG, white=inpaint)",
-    type=["png"],
+# ---------------------------------------
+# INFERENCE SETTINGS
+# ---------------------------------------
+st.subheader("Inference Settings")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    num_steps = st.slider("Inference Steps", 10, 75, 30)
+
+with col2:
+    guidance = st.slider("Guidance Scale", 1.0, 12.0, 7.5)
+
+prompt = st.text_input(
+    "Prompt",
+    "a realistic virtual try-on of the person wearing the garment"
 )
 
-if mask_file:
-    mask_img = Image.open(mask_file).convert("L")
-    st.image(mask_img, caption="Mask Image", width=300)
-else:
-    mask_img = None
+
+# ---------------------------------------
+# RUN BUTTON
+# ---------------------------------------
+run_btn = st.button("✨ Run Virtual Try-On")
 
 
-# -------------------------------
-# Inference Settings
-# -------------------------------
-num_steps = st.slider("Inference Steps", 10, 75, 25)
-guidance = st.slider("Guidance Scale", 1.0, 12.0, 7.5)
-prompt = st.text_input("Prompt", "a realistic virtual try-on of the person wearing the garment")
-
-run_btn = st.button("Run Try-On")
-
-
-# -------------------------------
+# ---------------------------------------
 # RUN INFERENCE
-# -------------------------------
+# ---------------------------------------
 if run_btn:
-    if not (person_img and cloth_img and mask_img):
-        st.error("Please upload person image, cloth image, AND mask image.")
+    if not (person_img and cloth_img):
+        st.error("Please upload BOTH a person image and a cloth image.")
     else:
-        with st.spinner("Running inpainting model..."):
+        with st.spinner("Generating try-on result... please wait ⏳"):
             try:
                 output = run_inpaint_tryon(
                     person_image=person_img,
                     cloth_image=cloth_img,
-                    mask_image=mask_img,
+                    mask_image=None,  # AUTO MASK
                     pose_json=None,
                     num_inference_steps=num_steps,
                     guidance_scale=guidance,
@@ -84,7 +95,7 @@ if run_btn:
                 )
 
                 st.success("Done!")
-                st.image(output, caption="Try-On Result", use_column_width=True)
+                st.image(output, caption="Virtual Try-On Result", use_column_width=True)
 
             except Exception as e:
                 st.error(f" Inference failed: {e}")
