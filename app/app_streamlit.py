@@ -2,12 +2,10 @@ import streamlit as st
 from PIL import Image
 
 # Correct import path
-from app.inpaint_inference import run_inpaint_tryon
+from app.controlnet_inference import run_controlnet_tryon
 
 
-# ---------------------------------------
-# PAGE CONFIG
-# ---------------------------------------
+#config
 st.set_page_config(
     page_title="AR Virtual Try-On",
     layout="wide"
@@ -16,9 +14,7 @@ st.set_page_config(
 st.title("AR Virtual Try-On System)")
 
 
-# ---------------------------------------
-# PERSON IMAGE UPLOAD
-# ---------------------------------------
+#person image upload
 st.subheader("Upload Person Image")
 
 person_file = st.file_uploader(
@@ -33,9 +29,7 @@ else:
     person_img = None
 
 
-# ---------------------------------------
-# CLOTH IMAGE UPLOAD
-# ---------------------------------------
+#cloth image upload
 st.subheader("Upload Clothing Image")
 
 cloth_file = st.file_uploader(
@@ -50,9 +44,7 @@ else:
     cloth_img = None
 
 
-# ---------------------------------------
-# INFERENCE SETTINGS
-# ---------------------------------------
+#inference
 st.subheader("Inference Settings")
 
 col1, col2 = st.columns(2)
@@ -69,30 +61,26 @@ prompt = st.text_input(
 )
 
 
-# ---------------------------------------
-# RUN BUTTON
-# ---------------------------------------
-run_btn = st.button("✨ Run Virtual Try-On")
+
+run_btn = st.button(" Run Virtual Try-On")
 
 
-# ---------------------------------------
-# RUN INFERENCE
-# ---------------------------------------
+# Execute inference on button click
 if run_btn:
     if not (person_img and cloth_img):
         st.error("Please upload BOTH a person image and a cloth image.")
     else:
         with st.spinner("Generating try-on result... please wait ⏳"):
             try:
-                output = run_inpaint_tryon(
-                    person_image=person_img,
-                    cloth_image=cloth_img,
-                    mask_image=None,  # AUTO MASK
-                    pose_json=None,
-                    num_inference_steps=num_steps,
-                    guidance_scale=guidance,
-                    prompt=prompt,
-                )
+                output = run_controlnet_tryon(
+                person_image=person_img,
+                cloth_image=cloth_img,
+                mask_image=None,  # auto cloth mask
+                pose_json=None,
+                num_inference_steps=num_steps,
+                guidance_scale=guidance,
+                prompt=prompt,
+            )
 
                 st.success("Done!")
                 st.image(output, caption="Virtual Try-On Result", use_column_width=True)

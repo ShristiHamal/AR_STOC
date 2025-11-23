@@ -57,8 +57,8 @@ def run_inpaint_tryon(
     cloth_image,
     mask_image=None,
     pose_json=None,  # (ignored for inpainting, kept for compatibility)
-    num_inference_steps=30,
-    guidance_scale=7.5,
+    num_inference_steps=10,
+    guidance_scale=5,
     prompt="a realistic virtual try-on of the person wearing the garment",
 ):
     """
