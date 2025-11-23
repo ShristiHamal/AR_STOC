@@ -1,12 +1,14 @@
 # app/run_inpaint_pipeline.py
 
-from app.pipeline_decorator import full_pipeline
+from clearml import Task
+from pipeline_decorator import full_pipeline
 
 if __name__ == "__main__":
-    # You can tweak these defaults when launching from ClearML / Colab
+    Task.init(project_name="AR_STOC", task_name="Run Inpaint Pipeline")
+
     full_pipeline(
         CLEARML_DATASET_ID="936ce7ce676a41eca85cecfc59f1d6db",
         train_pairs_relpath="train_pairs.txt",
-        sample_ratio=0.02,                    # 2% subset; set to 1.0 for full dataset
-        output_dir="./pipeline_inpaint_outputs_v3",
+        sample_ratio=0.05,   # use 5% for speed
+        output_dir="./inpaint_outputs",
     )
