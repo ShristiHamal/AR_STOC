@@ -52,64 +52,48 @@ def _torso_box(width: int, height: int):
 # Main inpaint-based try-on
 # -------------------------
 def run_inpaint_tryon(
-    person_image: Image.Image,
-    cloth_image: Image.Image,
-    mask_image: Image.Image,
+    person_image,
+    cloth_image,
+    mask_image,
+    pose_json=None,
     num_inference_steps: int = 25,
     guidance_scale: float = 7.5,
-    prompt: str = "a realistic photo of the person wearing the garment",
-) -> Image.Image:
+    prompt: str = "a realistic photo of the person wearing the pasted clothing",
+):
     """
-    person_image: PIL.Image (RGB) - person wearing original clothes
-    cloth_image:  PIL.Image (RGB) - front-view garment
-    mask_image:   PIL.Image (L or 1) - binary mask of the garment (same cloth space)
-    returns: PIL.Image with try-on result
+    Inpainting-based try-on using a pre-made binary mask.
     """
 
-    # 1. Normalize inputs
+    # Ensure correct modes
     person_image = person_image.convert("RGB")
-    cloth_image = cloth_image.convert("RGB")
-    mask_image = mask_image.convert("L")
+    cloth_image  = cloth_image.convert("RGB")
+    mask_image   = mask_image.convert("L")  # grayscale
 
-    # Stable Diffusion inpainting works best around 512x512
-    base_size = 512
-    person_image = person_image.resize((base_size, base_size), Image.BICUBIC)
-    W, H = person_image.size
+    # Resize inputs to 512x512 (Stable Diffusion default)
+    W, H = 512, 512
+    person_resized = person_image.resize((W, H))
+    mask_resized   = mask_image.resize((W, H))
+    cloth_resized  = cloth_image.resize((W, H))
 
-    # 2. Compute torso box where we want the garment
-    x1, y1, x2, y2 = _torso_box(W, H)
-    box_w, box_h = x2 - x1, y2 - y1
+    # Insert rough cloth into masked region
+    coarse = person_resized.copy()
+    coarse.paste(cloth_resized, (0, 0), mask_resized)
 
-    # 3. Resize cloth & mask to that box
-    cloth_resized = cloth_image.resize((box_w, box_h), Image.BICUBIC)
-    mask_resized = mask_image.resize((box_w, box_h), Image.NEAREST)
-
-    # 4. Create a full-size inpaint mask (0 = keep, 255 = inpaint)
-    inpaint_mask = Image.new("L", (W, H), 0)
-    inpaint_mask.paste(mask_resized, (x1, y1))
-
-    # 5. Create coarse image: paste garment into person using alpha from mask
-    coarse_img = person_image.copy()
-    # Convert mask_resized to proper alpha
-    cloth_rgba = cloth_resized.copy()
-    cloth_rgba.putalpha(mask_resized)
-    coarse_img.paste(cloth_rgba, (x1, y1), mask_resized)
-
-    # 6. Run Stable Diffusion inpainting
-    if device == "cuda":
-        with torch.autocast(device_type="cuda", dtype=dtype):
+    # Run inpainting
+    if torch.cuda.is_available():
+        with torch.autocast("cuda"):
             out = pipe(
                 prompt=prompt,
-                image=coarse_img,
-                mask_image=inpaint_mask,
+                image=coarse,
+                mask_image=mask_resized,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
             ).images[0]
     else:
         out = pipe(
             prompt=prompt,
-            image=coarse_img,
-            mask_image=inpaint_mask,
+            image=coarse,
+            mask_image=mask_resized,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
         ).images[0]
